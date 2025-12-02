@@ -700,9 +700,12 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         
         # Переключаемся на новую вкладку (последняя открытая)
         profile.driver.switch_to.window(profile.driver.window_handles[-1])
-        time.sleep(2)  # Даём время на загрузку
         
-        logging.info("✓ URL opened in AdsPower profile browser via Selenium")
+        # Ждём 10 секунд для загрузки страницы перед началом PyAutoGUI цикла
+        logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
+        wait_with_log(WAIT_AFTER_OPEN_TAB, "Page load wait", 10.0)
+        
+        logging.info("✓ URL opened in AdsPower profile browser via Selenium, page loaded")
     except Exception as e:
         logging.warning("Failed to open URL in AdsPower browser via Selenium: %s", e)
         return None
@@ -788,20 +791,15 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             # Убеждаемся, что окно профиля активно
             profile_no = get_profile_no(profile_id)
             focus_profile_window(profile_no)
-            time.sleep(2)  # Даём время на активацию
+            time.sleep(1)  # Даём время на активацию
             
             logging.info("  ✓ Profile window is active (Medium URL already opened via Selenium)")
         except Exception as e:
             logging.error("  ✗ Failed to ensure window is active: %s", e)
             return None
         
-        # Шаг 2: Ждём 10 секунд (рандомизировано)
-        logging.info("STEP 2: Waiting for page to load...")
-        wait_with_log(WAIT_AFTER_OPEN_TAB, "STEP 2", 10.0)
-        logging.info("  ✓ Wait completed")
-        
-        # Шаг 3: Кликаем на поле ввода текста (title)
-        logging.info("STEP 3: Clicking on title input field...")
+        # Шаг 2: Кликаем на поле ввода текста (title) - начинаем PyAutoGUI цикл
+        logging.info("STEP 2: Clicking on title input field...")
         logging.info("  Coordinates: %s", COORDS_TITLE_INPUT)
         try:
             pyautogui.click(*COORDS_TITLE_INPUT)
@@ -810,10 +808,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to click: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_TITLE_CLICK, "STEP 3", 10.0)
+        wait_with_log(WAIT_AFTER_TITLE_CLICK, "STEP 2", 10.0)
         
-        # Шаг 4: Вставляем title
-        logging.info("STEP 4: Pasting title...")
+        # Шаг 3: Вставляем title
+        logging.info("STEP 3: Pasting title...")
         logging.info("  Title length: %d characters", len(title))
         try:
             pyperclip.copy(title)
@@ -824,10 +822,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to paste title: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_TITLE_PASTE, "STEP 4", 10.0)
+        wait_with_log(WAIT_AFTER_TITLE_PASTE, "STEP 3", 10.0)
         
-        # Шаг 5: Нажимаем Enter
-        logging.info("STEP 5: Pressing Enter...")
+        # Шаг 4: Нажимаем Enter
+        logging.info("STEP 4: Pressing Enter...")
         try:
             pyautogui.press('enter')
             logging.info("  ✓ Enter pressed successfully")
@@ -835,10 +833,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to press Enter: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_ENTER, "STEP 5", 10.0)
+        wait_with_log(WAIT_AFTER_ENTER, "STEP 4", 10.0)
         
-        # Шаг 6: Вставляем body
-        logging.info("STEP 6: Pasting body...")
+        # Шаг 5: Вставляем body
+        logging.info("STEP 5: Pasting body...")
         logging.info("  Body length: %d characters", len(body))
         try:
             pyperclip.copy(body)
@@ -849,10 +847,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to paste body: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_BODY_PASTE, "STEP 6", 10.0)
+        wait_with_log(WAIT_AFTER_BODY_PASTE, "STEP 5", 10.0)
         
-        # Шаг 7: Кликаем на первую кнопку Publish
-        logging.info("STEP 7: Clicking first Publish button...")
+        # Шаг 6: Кликаем на первую кнопку Publish
+        logging.info("STEP 6: Clicking first Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_1)
         logging.info("  Waiting 5 seconds before clicking Publish...")
         time.sleep(5)  # Ожидание перед нажатием первой кнопки Publish
@@ -863,10 +861,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to click: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_PUBLISH_1, "STEP 7", 10.0)
+        wait_with_log(WAIT_AFTER_PUBLISH_1, "STEP 6", 10.0)
         
-        # Шаг 8: Кликаем на поле ввода хэштегов
-        logging.info("STEP 8: Clicking on hashtags input field...")
+        # Шаг 7: Кликаем на поле ввода хэштегов
+        logging.info("STEP 7: Clicking on hashtags input field...")
         logging.info("  Coordinates: %s", COORDS_HASHTAGS_INPUT)
         try:
             pyautogui.click(*COORDS_HASHTAGS_INPUT)
@@ -875,10 +873,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to click: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_HASHTAGS_CLICK, "STEP 8", 10.0)
+        wait_with_log(WAIT_AFTER_HASHTAGS_CLICK, "STEP 7", 10.0)
         
-        # Шаг 9: Вставляем хэштеги через запятую (каждый отдельно с запятой)
-        logging.info("STEP 9: Pasting hashtags one by one...")
+        # Шаг 8: Вставляем хэштеги через запятую (каждый отдельно с запятой)
+        logging.info("STEP 8: Pasting hashtags one by one...")
         logging.info("  Hashtags to paste: %s", hashtags[:5])
         try:
             for i, hashtag in enumerate(hashtags[:5]):  # Максимум 5 хэштегов
@@ -887,12 +885,12 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                     pyperclip.copy(hashtag)
                     time.sleep(0.2)
                     pyautogui.hotkey('ctrl', 'v')
-                    wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 9 hashtag {i+1}", 10.0)
+                    wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 8 hashtag {i+1}", 10.0)
                     
                     if i < len(hashtags[:5]) - 1:  # Не добавляем запятую после последнего
                         logging.debug("  Adding comma after hashtag %d", i+1)
                         pyautogui.write(',', interval=0.1)
-                        wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 9 comma {i+1}", 10.0)
+                        wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 8 comma {i+1}", 10.0)
             
             logging.info("  ✓ All hashtags pasted successfully")
             logging.info("  Final hashtags: %s", ", ".join(hashtags[:5]))
@@ -900,8 +898,8 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to paste hashtags: %s", e)
             return None
         
-        # Шаг 10: Кликаем на финальную кнопку Publish
-        logging.info("STEP 10: Clicking final Publish button...")
+        # Шаг 9: Кликаем на финальную кнопку Publish
+        logging.info("STEP 9: Clicking final Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_2)
         logging.info("  Waiting 3 seconds before clicking final Publish...")
         time.sleep(3)  # Ожидание перед нажатием финальной кнопки Publish
@@ -915,11 +913,11 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to click: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 10", 10.0)
+        wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 9", 10.0)
         logging.info("  ✓ Publication should be complete")
         
-        # Шаг 11: Выделяем адресную строку через Ctrl+L
-        logging.info("STEP 11: Selecting URL bar with Ctrl+L...")
+        # Шаг 10: Выделяем адресную строку через Ctrl+L
+        logging.info("STEP 10: Selecting URL bar with Ctrl+L...")
         try:
             pyautogui.hotkey('ctrl', 'l')
             logging.info("  ✓ URL bar selected successfully")
@@ -927,13 +925,13 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to select URL bar: %s", e)
             return None
         
-        wait_with_log(WAIT_AFTER_URL_BAR_CLICK, "STEP 11", 10.0)
+        wait_with_log(WAIT_AFTER_URL_BAR_CLICK, "STEP 10", 10.0)
         
-        # Шаг 12: Копируем URL (Ctrl+C)
-        logging.info("STEP 12: Copying URL (Ctrl+C)...")
+        # Шаг 11: Копируем URL (Ctrl+C)
+        logging.info("STEP 11: Copying URL (Ctrl+C)...")
         try:
             pyautogui.hotkey('ctrl', 'c')
-            wait_with_log(WAIT_AFTER_COPY, "STEP 12", 10.0)
+            wait_with_log(WAIT_AFTER_COPY, "STEP 11", 10.0)
             url = pyperclip.paste()
             logging.info("  ✓ URL copied from clipboard")
             logging.info("  Retrieved URL: %s", url)
