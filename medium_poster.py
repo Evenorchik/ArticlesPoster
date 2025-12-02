@@ -694,12 +694,49 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             logging.error("Driver not available for profile %d", profile_no)
             return None
         
-        # Открываем новую вкладку с Medium через Selenium
-        profile.driver.execute_script("window.open(arguments[0], '_blank');", MEDIUM_NEW_STORY_URL)
-        time.sleep(1)
+        # Сохраняем текущую вкладку (about:blank с window_tag)
+        original_window = profile.driver.current_window_handle
+        logging.debug("  Original window handle: %s", original_window)
         
-        # Переключаемся на новую вкладку (последняя открытая)
-        profile.driver.switch_to.window(profile.driver.window_handles[-1])
+        # Открываем новую вкладку с Medium через Selenium
+        # Используем правильный синтаксис для window.open
+        profile.driver.execute_script(f"window.open('{MEDIUM_NEW_STORY_URL}', '_blank');")
+        time.sleep(2)  # Даём время на открытие вкладки
+        
+        # Получаем все открытые вкладки
+        all_windows = profile.driver.window_handles
+        logging.debug("  Total windows open: %d", len(all_windows))
+        
+        # Находим новую вкладку (не ту, что была открыта изначально)
+        new_window = None
+        for window in all_windows:
+            if window != original_window:
+                new_window = window
+                break
+        
+        if new_window:
+            # Переключаемся на новую вкладку
+            profile.driver.switch_to.window(new_window)
+            logging.info("  Switched to new tab with Medium URL")
+        else:
+            # Если не нашли новую вкладку, пробуем последнюю
+            logging.warning("  New tab not found, trying last window handle")
+            if len(all_windows) > 0:
+                profile.driver.switch_to.window(all_windows[-1])
+            else:
+                logging.error("  No windows available!")
+                return None
+        
+        # Проверяем, что мы на правильной странице
+        current_url = profile.driver.current_url
+        logging.info("  Current URL after switch: %s", current_url)
+        
+        # Если мы всё ещё на about:blank, пробуем просто перейти на URL
+        if 'about:blank' in current_url or 'medium.com' not in current_url:
+            logging.info("  URL not loaded correctly, trying driver.get()...")
+            profile.driver.get(MEDIUM_NEW_STORY_URL)
+            time.sleep(2)
+            logging.info("  Current URL after get(): %s", profile.driver.current_url)
         
         # Ждём 10 секунд для загрузки страницы перед началом PyAutoGUI цикла
         logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
