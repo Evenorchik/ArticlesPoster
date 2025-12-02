@@ -368,28 +368,52 @@ def activate_ads_power_profile(profile_id: str) -> bool:
         browser_windows = []
         for window in gw.getAllWindows():
             title = window.title.lower()
-            if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera']):
-                if window.visible:
+            # Ищем окна браузера, но не системные диалоги
+            if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera', 'chromium']):
+                if window.visible and window.title.strip():
                     browser_windows.append(window)
         
         if browser_windows:
-            # Активируем первое найденное окно браузера
+            # Активируем первое найденное окно браузера (обычно это окно Ads Power профиля)
             window = browser_windows[0]
             window.activate()
+            time.sleep(0.5)  # Даём время на активацию
             window.maximize()
-            logging.info("✓ Profile window activated via PyAutoGUI")
+            time.sleep(0.5)  # Даём время на максимизацию
+            logging.info("✓ Profile window activated via PyAutoGUI: %s", window.title)
             return True
         else:
             logging.warning("No browser windows found to activate")
-            return False
+            # Пробуем альтернативный способ - просто активировать активное окно
+            try:
+                pyautogui.hotkey('alt', 'tab')
+                time.sleep(0.3)
+                logging.info("✓ Tried to switch to active window")
+                return True
+            except:
+                return False
             
     except ImportError:
-        logging.warning("pygetwindow not available, cannot activate window")
-        logging.info("Please install: pip install pygetwindow")
-        return False
+        logging.warning("pygetwindow not available, trying alternative method")
+        # Альтернативный способ без pygetwindow
+        try:
+            pyautogui.hotkey('alt', 'tab')
+            time.sleep(0.3)
+            logging.info("✓ Switched to active window (alternative method)")
+            return True
+        except Exception as e:
+            logging.warning("Failed to activate window: %s", e)
+            return False
     except Exception as e:
         logging.warning("Failed to activate window via PyAutoGUI: %s", e)
-        return False
+        # Пробуем альтернативный способ
+        try:
+            pyautogui.hotkey('alt', 'tab')
+            time.sleep(0.3)
+            logging.info("✓ Switched to active window (fallback)")
+            return True
+        except:
+            return False
 
 
 def open_ads_power_profile(profile_id: str) -> Optional[str]:
@@ -415,17 +439,35 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             # Профиль уже открыт - активируем окно
             logging.info("Profile ID %s (No: %s) is already active, activating window...", profile_id, profile_no)
             if activate_ads_power_profile(profile_id):
-                # Открываем URL в уже открытом профиле через webbrowser
-                logging.info("✓ Profile ID %s (No: %s) activated, opening URL...", profile_id, profile_no)
+                # Открываем URL в уже открытом профиле через PyAutoGUI
+                logging.info("✓ Profile ID %s (No: %s) activated, opening URL in browser...", profile_id, profile_no)
                 try:
-                    webbrowser.open(MEDIUM_NEW_STORY_URL)
-                    time.sleep(2)  # Даём время на открытие URL
+                    # Фокусируем адресную строку браузера
+                    pyautogui.hotkey('ctrl', 'l')
+                    time.sleep(0.5)
+                    # Вводим URL
+                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+                    time.sleep(0.3)
+                    # Нажимаем Enter
+                    pyautogui.press('enter')
+                    time.sleep(2)  # Даём время на загрузку страницы
+                    logging.info("✓ URL opened in AdsPower profile browser")
                 except Exception as e:
-                    logging.warning("Failed to open URL via webbrowser: %s", e)
+                    logging.warning("Failed to open URL in AdsPower browser: %s", e)
                 
                 return profile_id
             else:
-                logging.warning("Failed to activate window, but profile is active")
+                logging.warning("Failed to activate window, but profile is active - trying to open URL anyway")
+                # Пробуем открыть URL даже если активация не удалась
+                try:
+                    pyautogui.hotkey('ctrl', 'l')
+                    time.sleep(0.5)
+                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+                    time.sleep(0.3)
+                    pyautogui.press('enter')
+                    time.sleep(2)
+                except Exception as e:
+                    logging.warning("Failed to open URL: %s", e)
                 return profile_id
     
     # Шаг 2: Профиль не активен - открываем его через API v2
@@ -466,12 +508,23 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                 # Ждём немного, чтобы браузер успел открыться
                 time.sleep(3)
                 
-                # Открываем URL в открытом профиле
+                # Открываем URL в открытом профиле через PyAutoGUI
                 try:
-                    webbrowser.open(MEDIUM_NEW_STORY_URL)
-                    time.sleep(2)
+                    # Активируем окно профиля
+                    activate_ads_power_profile(profile_id)
+                    time.sleep(1)
+                    # Фокусируем адресную строку браузера
+                    pyautogui.hotkey('ctrl', 'l')
+                    time.sleep(0.5)
+                    # Вводим URL
+                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+                    time.sleep(0.3)
+                    # Нажимаем Enter
+                    pyautogui.press('enter')
+                    time.sleep(2)  # Даём время на загрузку страницы
+                    logging.info("✓ URL opened in AdsPower profile browser")
                 except Exception as e:
-                    logging.warning("Failed to open URL via webbrowser: %s", e)
+                    logging.warning("Failed to open URL in AdsPower browser: %s", e)
                 
                 return profile_id
             else:
@@ -575,15 +628,28 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("Hashtags: %s", hashtags)
         logging.info("")
         
-        # Шаг 1: Открываем новую вкладку с ссылкой
+        # Шаг 1: Открываем Medium new story URL в активном окне AdsPower профиля
         logging.info("="*60)
-        logging.info("STEP 1: Opening new tab with Medium new story URL...")
+        logging.info("STEP 1: Opening Medium new story in active AdsPower browser...")
         logging.info("  URL: %s", MEDIUM_NEW_STORY_URL)
         try:
-            webbrowser.open_new_tab(MEDIUM_NEW_STORY_URL)
-            logging.info("  ✓ Tab opened successfully")
+            # Убеждаемся, что окно профиля активно
+            activate_ads_power_profile(profile_id)
+            time.sleep(0.5)
+            
+            # Фокусируем адресную строку браузера (Ctrl+L)
+            pyautogui.hotkey('ctrl', 'l')
+            time.sleep(0.5)
+            
+            # Вводим URL
+            pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+            time.sleep(0.3)
+            
+            # Нажимаем Enter для перехода
+            pyautogui.press('enter')
+            logging.info("  ✓ URL opened in AdsPower profile browser")
         except Exception as e:
-            logging.error("  ✗ Failed to open tab: %s", e)
+            logging.error("  ✗ Failed to open URL in AdsPower browser: %s", e)
             return None
         
         # Шаг 2: Ждём 10 секунд (рандомизировано)
