@@ -468,9 +468,6 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     # Нажимаем Enter
                     pyautogui.press('enter')
                     time.sleep(1)  # Даём время на начало загрузки
-                    # ВАЖНО: Возвращаем фокус в браузер после Enter
-                    activate_ads_power_profile(profile_id)
-                    time.sleep(0.5)
                     logging.info("✓ URL opened in AdsPower profile browser")
                 except Exception as e:
                     logging.warning("Failed to open URL in AdsPower browser: %s", e)
@@ -488,9 +485,6 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     time.sleep(0.5)
                     pyautogui.press('enter')
                     time.sleep(1)
-                    # Возвращаем фокус в браузер
-                    activate_ads_power_profile(profile_id)
-                    time.sleep(0.5)
                 except Exception as e:
                     logging.warning("Failed to open URL: %s", e)
                 return profile_id
@@ -550,9 +544,6 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     # Нажимаем Enter
                     pyautogui.press('enter')
                     time.sleep(1)  # Даём время на начало загрузки
-                    # ВАЖНО: Возвращаем фокус в браузер после Enter
-                    activate_ads_power_profile(profile_id)
-                    time.sleep(0.5)
                     logging.info("✓ URL opened in AdsPower profile browser")
                 except Exception as e:
                     logging.warning("Failed to open URL in AdsPower browser: %s", e)
@@ -684,11 +675,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             pyautogui.press('enter')
             time.sleep(1)  # Даём время на начало загрузки
             
-            # ВАЖНО: После Enter фокус может уйти в терминал, возвращаем его в браузер
-            logging.debug("  Ensuring browser window is still active after navigation...")
-            activate_ads_power_profile(profile_id)
-            time.sleep(0.5)
-            
             logging.info("  ✓ URL opened in AdsPower profile browser")
         except Exception as e:
             logging.error("  ✗ Failed to open URL in AdsPower browser: %s", e)
@@ -699,12 +685,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         wait_with_log(WAIT_AFTER_OPEN_TAB, "STEP 2", 10.0)
         logging.info("  ✓ Wait completed")
         
-        # ВАЖНО: Перед каждым действием убеждаемся, что браузер активен
-        # (фокус мог уйти в терминал после Enter)
-        logging.debug("  Ensuring browser window is active before clicking...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
-        
         # Шаг 3: Кликаем на поле ввода текста (title)
         logging.info("STEP 3: Clicking on title input field...")
         logging.info("  Coordinates: %s", COORDS_TITLE_INPUT)
@@ -713,16 +693,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.info("  ✓ Clicked successfully")
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
-            # Пробуем ещё раз активировать окно и кликнуть
-            logging.debug("  Retrying after reactivating browser window...")
-            activate_ads_power_profile(profile_id)
-            time.sleep(0.5)
-            try:
-                pyautogui.click(*COORDS_TITLE_INPUT)
-                logging.info("  ✓ Clicked successfully (retry)")
-            except Exception as e2:
-                logging.error("  ✗ Failed to click after retry: %s", e2)
-                return None
+            return None
         
         wait_with_log(WAIT_AFTER_TITLE_CLICK, "STEP 3", 10.0)
         
@@ -751,11 +722,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         
         wait_with_log(WAIT_AFTER_ENTER, "STEP 5", 10.0)
         
-        # ВАЖНО: После Enter фокус может уйти в терминал, возвращаем его в браузер
-        logging.debug("  Ensuring browser window is active after Enter...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
-        
         # Шаг 6: Вставляем body
         logging.info("STEP 6: Pasting body...")
         logging.info("  Body length: %d characters", len(body))
@@ -770,11 +736,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         
         wait_with_log(WAIT_AFTER_BODY_PASTE, "STEP 6", 10.0)
         
-        # ВАЖНО: Убеждаемся, что браузер активен перед кликом
-        logging.debug("  Ensuring browser window is active before clicking Publish...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
-        
         # Шаг 7: Кликаем на первую кнопку Publish
         logging.info("STEP 7: Clicking first Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_1)
@@ -786,11 +747,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             return None
         
         wait_with_log(WAIT_AFTER_PUBLISH_1, "STEP 7", 10.0)
-        
-        # ВАЖНО: Убеждаемся, что браузер активен перед кликом
-        logging.debug("  Ensuring browser window is active before clicking hashtags field...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
         
         # Шаг 8: Кликаем на поле ввода хэштегов
         logging.info("STEP 8: Clicking on hashtags input field...")
@@ -827,11 +783,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.error("  ✗ Failed to paste hashtags: %s", e)
             return None
         
-        # ВАЖНО: Убеждаемся, что браузер активен перед финальным кликом
-        logging.debug("  Ensuring browser window is active before final Publish...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
-        
         # Шаг 10: Кликаем на финальную кнопку Publish
         logging.info("STEP 10: Clicking final Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_2)
@@ -844,11 +795,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         
         wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 10", 10.0)
         logging.info("  ✓ Publication should be complete")
-        
-        # ВАЖНО: Убеждаемся, что браузер активен перед кликом на URL bar
-        logging.debug("  Ensuring browser window is active before clicking URL bar...")
-        activate_ads_power_profile(profile_id)
-        time.sleep(0.5)
         
         # Шаг 11: Кликаем на строку браузера
         logging.info("STEP 11: Clicking on URL bar...")
