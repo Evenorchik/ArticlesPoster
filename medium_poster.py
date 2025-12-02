@@ -425,19 +425,24 @@ def prepare_cf_html(html_fragment: str) -> bytes:
     """
     Подготавливает HTML для формата CF_HTML (Windows clipboard format),
     корректно вычисляя позиции в байтах UTF-8.
+    Формат должен соответствовать спецификации Microsoft CF_HTML.
     """
+    # Базовый HTML с правильной структурой
     html_prefix = """<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
-<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body>"""
+<HTML><HEAD><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></HEAD><BODY>"""
     start_marker = "<!--StartFragment-->"
     end_marker = "<!--EndFragment-->"
-    html_suffix = "</body></html>"
+    html_suffix = "</BODY></HTML>"
 
+    # Собираем полный HTML
     full_html = f"{html_prefix}{start_marker}{html_fragment}{end_marker}{html_suffix}"
+    
+    # Кодируем в UTF-8 для вычисления позиций в байтах
     full_html_bytes = full_html.encode("utf-8")
-
     start_marker_bytes = start_marker.encode("utf-8")
     end_marker_bytes = end_marker.encode("utf-8")
 
+    # Находим позиции маркеров в байтах
     start_idx = full_html_bytes.find(start_marker_bytes)
     if start_idx == -1:
         raise ValueError("StartFragment marker not found in HTML fragment")
@@ -448,24 +453,29 @@ def prepare_cf_html(html_fragment: str) -> bytes:
         raise ValueError("EndFragment marker not found in HTML fragment")
     fragment_end = end_idx
 
+    # Формируем заголовок CF_HTML (используем \r\n для совместимости с Windows)
     header_template = (
         "Version:0.9\r\n"
         "StartHTML:{start_html:010d}\r\n"
         "EndHTML:{end_html:010d}\r\n"
         "StartFragment:{start_fragment:010d}\r\n"
         "EndFragment:{end_fragment:010d}\r\n"
+        "SourceURL:about:blank\r\n"
     )
 
+    # Вычисляем длину заголовка (с плейсхолдерами)
     placeholder_header = header_template.format(
         start_html=0, end_html=0, start_fragment=0, end_fragment=0
     )
-    header_len = len(placeholder_header)
+    header_len = len(placeholder_header.encode("utf-8"))
 
+    # Вычисляем финальные позиции с учётом заголовка
     start_html = header_len
     end_html = start_html + len(full_html_bytes)
     start_fragment = start_html + fragment_start
     end_fragment = start_html + fragment_end
 
+    # Формируем финальный заголовок
     header = header_template.format(
         start_html=start_html,
         end_html=end_html,
@@ -473,7 +483,12 @@ def prepare_cf_html(html_fragment: str) -> bytes:
         end_fragment=end_fragment,
     )
 
+    # Собираем финальный CF_HTML
     cf_html_bytes = header.encode("utf-8") + full_html_bytes
+    
+    logging.debug("CF_HTML prepared: header_len=%d, html_len=%d, fragment_start=%d, fragment_end=%d", 
+                  header_len, len(full_html_bytes), start_fragment, end_fragment)
+    
     return cf_html_bytes
 
 
@@ -515,9 +530,22 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
             # Закрываем буфер обмена
             win32clipboard.CloseClipboard()
             
-            logging.debug("Markdown copied to clipboard as Rich Text (HTML Format)")
+            logging.info("✓ Markdown copied to clipboard as Rich Text (HTML Format)")
             logging.debug("  CF_HTML size: %d bytes", len(cf_html_bytes))
             logging.debug("  HTML Format registered: %d", html_format)
+            logging.debug("  HTML fragment preview (first 200 chars): %s", html_fragment[:200])
+            
+            # Проверяем, что HTML действительно в буфере (для отладки)
+            try:
+                win32clipboard.OpenClipboard()
+                if win32clipboard.IsClipboardFormatAvailable(html_format):
+                    logging.debug("  ✓ HTML Format confirmed in clipboard")
+                else:
+                    logging.warning("  ⚠ HTML Format NOT found in clipboard after setting!")
+                win32clipboard.CloseClipboard()
+            except:
+                pass
+            
             return True
         except ImportError:
             # Fallback: используем pyperclip (может не поддерживать HTML напрямую)
@@ -1031,28 +1059,86 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  Body length: %d characters", len(body))
         
         # Даем Medium время обработать Enter и переключить фокус на поле body
-        time.sleep(1)
+        time.sleep(1.5)
         
         try:
-            # Конвертируем Markdown в HTML и копируем как Rich Text в буфер обмена
-            logging.debug("  Converting Markdown to HTML and copying to clipboard as CF_HTML...")
-            if not copy_markdown_as_rich_text(body):
-                logging.warning("  Failed to copy as Rich Text, falling back to plain text")
-                pyperclip.copy(body)
-            else:
-                logging.debug("  ✓ HTML copied to clipboard in CF_HTML format")
+            # Конвертируем Markdown в HTML
+            html_fragment = markdown_to_html(body)
+            logging.debug("  HTML fragment length: %d characters", len(html_fragment))
+            logging.debug("  HTML preview (first 300 chars): %s", html_fragment[:300])
             
-            # Небольшая задержка перед вставкой
-            time.sleep(0.3)
+            # Пробуем вставить через clipboard (основной метод)
+            clipboard_success = False
+            try:
+                logging.debug("  Attempting clipboard method (CF_HTML)...")
+                if copy_markdown_as_rich_text(body):
+                    logging.info("  ✓ HTML copied to clipboard in CF_HTML format")
+                    time.sleep(0.5)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(1)
+                    clipboard_success = True
+                    logging.info("  ✓ Body pasted via clipboard")
+                else:
+                    logging.warning("  Clipboard copy failed")
+            except Exception as clip_err:
+                logging.warning("  Clipboard method failed: %s", clip_err)
             
-            # Вставляем через Ctrl+V (PyAutoGUI)
-            logging.debug("  Pasting via Ctrl+V...")
-            pyautogui.hotkey('ctrl', 'v')
+            # Если clipboard не сработал, пробуем через Selenium (fallback)
+            if not clipboard_success:
+                logging.warning("  Clipboard method failed, trying Selenium fallback...")
+                try:
+                    profile_no = get_profile_no(profile_id)
+                    profile = profiles[profile_no]
+                    
+                    if profile.driver and profile.medium_window_handle:
+                        # Переключаемся на вкладку Medium
+                        profile.driver.switch_to.window(profile.medium_window_handle)
+                        
+                        # Вставляем HTML через JavaScript
+                        script = """
+                        (function(html) {
+                            const editable = document.querySelector('[contenteditable="true"]');
+                            if (!editable) return false;
+                            
+                            editable.focus();
+                            const range = document.createRange();
+                            range.selectNodeContents(editable);
+                            range.collapse(false);
+                            const sel = window.getSelection();
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                            
+                            const div = document.createElement('div');
+                            div.innerHTML = html;
+                            const fragment = document.createDocumentFragment();
+                            while (div.firstChild) {
+                                fragment.appendChild(div.firstChild);
+                            }
+                            range.insertNode(fragment);
+                            
+                            const inputEvent = new Event('input', { bubbles: true });
+                            editable.dispatchEvent(inputEvent);
+                            return true;
+                        })(arguments[0]);
+                        """
+                        result = profile.driver.execute_script(script, html_fragment)
+                        if result:
+                            logging.info("  ✓ Body inserted via Selenium fallback")
+                            time.sleep(0.5)
+                        else:
+                            raise Exception("Selenium insertion returned false")
+                    else:
+                        raise Exception("Driver or medium_window_handle not available")
+                except Exception as sel_err:
+                    logging.error("  ✗ Selenium fallback also failed: %s", sel_err)
+                    # Последний fallback: plain text
+                    logging.warning("  Using plain text fallback (formatting will be lost)")
+                    pyperclip.copy(body)
+                    time.sleep(0.3)
+                    pyautogui.hotkey('ctrl', 'v')
+                    time.sleep(0.5)
             
-            # Даем время на обработку вставки
-            time.sleep(0.5)
-            
-            logging.info("  ✓ Body pasted successfully as Rich Text")
+            logging.info("  ✓ Body insertion completed")
         except Exception as e:
             logging.error("  ✗ Failed to paste body: %s", e, exc_info=True)
             return None
