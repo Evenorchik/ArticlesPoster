@@ -460,7 +460,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     time.sleep(0.5)
                     # Нажимаем Enter
                     pyautogui.press('enter')
-                    time.sleep(1)  # Даём время на начало загрузки
+                    time.sleep(2)  # Даём время на начало загрузки
                     logging.info("✓ URL opened in AdsPower profile browser")
                 except Exception as e:
                     logging.warning("Failed to open URL in AdsPower browser: %s", e)
@@ -481,7 +481,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
                     time.sleep(0.5)
                     pyautogui.press('enter')
-                    time.sleep(1)
+                    time.sleep(2)
                 except Exception as e:
                     logging.warning("Failed to open URL: %s", e)
                 return profile_id
@@ -525,7 +525,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                 # Ждём появления и активируем окно браузера (максимум 15 секунд)
                 logging.info("Waiting for browser window to appear and activating it...")
                 if ensure_browser_window_active(profile_id, wait_seconds=15):
-                    time.sleep(1)  # Дополнительная пауза после активации
+                    time.sleep(2)  # Дополнительная пауза после активации
                     
                     # Открываем URL в открытом профиле через PyAutoGUI
                     try:
@@ -545,7 +545,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                         time.sleep(0.5)
                         # Нажимаем Enter
                         pyautogui.press('enter')
-                        time.sleep(1)  # Даём время на начало загрузки
+                        time.sleep(2)  # Даём время на начало загрузки
                         logging.info("✓ URL opened in AdsPower profile browser")
                     except Exception as e:
                         logging.warning("Failed to open URL in AdsPower browser: %s", e)
@@ -564,7 +564,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                         pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
                         time.sleep(0.5)
                         pyautogui.press('enter')
-                        time.sleep(1)
+                        time.sleep(2)
                         logging.info("✓ URL opened (window activation may have failed)")
                     except Exception as e:
                         logging.warning("Failed to open URL: %s", e)
@@ -678,7 +678,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         try:
             # Убеждаемся, что окно профиля активно
             ensure_browser_window_active(profile_id)
-            time.sleep(1)  # Даём больше времени на активацию
+            time.sleep(2)  # Даём больше времени на активацию
             
             # Кликаем по адресной строке для гарантированной активации окна
             logging.info("  Clicking on URL bar at %s to ensure window is active", COORDS_URL_BAR)
@@ -765,6 +765,8 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         # Шаг 7: Кликаем на первую кнопку Publish
         logging.info("STEP 7: Clicking first Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_1)
+        logging.info("  Waiting 5 seconds before clicking Publish...")
+        time.sleep(5)  # Ожидание перед нажатием первой кнопки Publish
         try:
             pyautogui.click(*COORDS_PUBLISH_BUTTON_1)
             logging.info("  ✓ Clicked successfully")
@@ -812,6 +814,8 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         # Шаг 10: Кликаем на финальную кнопку Publish
         logging.info("STEP 10: Clicking final Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_2)
+        logging.info("  Waiting 5 seconds before clicking final Publish...")
+        time.sleep(5)  # Ожидание перед нажатием финальной кнопки Publish
         try:
             pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
             logging.info("  ✓ Clicked successfully")
