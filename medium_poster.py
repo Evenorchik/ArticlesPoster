@@ -445,6 +445,10 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                 # Открываем URL в уже открытом профиле через PyAutoGUI
                 logging.info("✓ Profile ID %s (No: %s) activated, opening URL in browser...", profile_id, profile_no)
                 try:
+                    # Кликаем по адресной строке для гарантированной активации окна
+                    logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
+                    pyautogui.click(*COORDS_URL_BAR)
+                    time.sleep(0.5)
                     # Фокусируем адресную строку браузера
                     pyautogui.hotkey('ctrl', 'l')
                     time.sleep(0.5)
@@ -466,6 +470,10 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                 logging.warning("Failed to activate window, but profile is active - trying to open URL anyway")
                 # Пробуем открыть URL даже если активация не удалась
                 try:
+                    # Кликаем по адресной строке для гарантированной активации окна
+                    logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
+                    pyautogui.click(*COORDS_URL_BAR)
+                    time.sleep(0.5)
                     pyautogui.hotkey('ctrl', 'l')
                     time.sleep(0.5)
                     pyautogui.hotkey('ctrl', 'a')
@@ -522,6 +530,10 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     # Открываем URL в открытом профиле через PyAutoGUI
                     try:
                         logging.info("Opening URL in active browser window...")
+                        # Кликаем по адресной строке для гарантированной активации окна
+                        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
+                        pyautogui.click(*COORDS_URL_BAR)
+                        time.sleep(0.5)
                         # Фокусируем адресную строку браузера
                         pyautogui.hotkey('ctrl', 'l')
                         time.sleep(0.5)
@@ -541,6 +553,10 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                     logging.warning("Failed to activate browser window, but trying to open URL anyway...")
                     # Пробуем открыть URL даже если активация не удалась
                     try:
+                        # Кликаем по адресной строке для гарантированной активации окна
+                        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
+                        pyautogui.click(*COORDS_URL_BAR)
+                        time.sleep(0.5)
                         pyautogui.hotkey('ctrl', 'l')
                         time.sleep(0.5)
                         pyautogui.hotkey('ctrl', 'a')
@@ -663,6 +679,11 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             # Убеждаемся, что окно профиля активно
             ensure_browser_window_active(profile_id)
             time.sleep(1)  # Даём больше времени на активацию
+            
+            # Кликаем по адресной строке для гарантированной активации окна
+            logging.info("  Clicking on URL bar at %s to ensure window is active", COORDS_URL_BAR)
+            pyautogui.click(*COORDS_URL_BAR)
+            time.sleep(0.5)
             
             # Фокусируем адресную строку браузера (Ctrl+L)
             pyautogui.hotkey('ctrl', 'l')
