@@ -99,6 +99,7 @@ class Profile:
     profile_id: str
     driver: Optional[object] = None  # Selenium WebDriver
     window_tag: str = field(init=False)
+    medium_window_handle: Optional[str] = None  # Handle вкладки с Medium
     
     def __post_init__(self):
         self.window_tag = f"ADS_PROFILE_{self.profile_no}"
@@ -698,45 +699,28 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         original_window = profile.driver.current_window_handle
         logging.debug("  Original window handle: %s", original_window)
         
-        # Открываем новую вкладку с Medium через Selenium
-        # Используем правильный синтаксис для window.open
-        profile.driver.execute_script(f"window.open('{MEDIUM_NEW_STORY_URL}', '_blank');")
-        time.sleep(2)  # Даём время на открытие вкладки
+        # Закрываем вкладку about:blank, чтобы не было путаницы
+        # Или просто переходим на Medium в текущей вкладке
+        logging.info("  Navigating to Medium URL in current tab...")
+        profile.driver.get(MEDIUM_NEW_STORY_URL)
+        time.sleep(2)  # Даём время на загрузку
         
-        # Получаем все открытые вкладки
-        all_windows = profile.driver.window_handles
-        logging.debug("  Total windows open: %d", len(all_windows))
-        
-        # Находим новую вкладку (не ту, что была открыта изначально)
-        new_window = None
-        for window in all_windows:
-            if window != original_window:
-                new_window = window
-                break
-        
-        if new_window:
-            # Переключаемся на новую вкладку
-            profile.driver.switch_to.window(new_window)
-            logging.info("  Switched to new tab with Medium URL")
-        else:
-            # Если не нашли новую вкладку, пробуем последнюю
-            logging.warning("  New tab not found, trying last window handle")
-            if len(all_windows) > 0:
-                profile.driver.switch_to.window(all_windows[-1])
-            else:
-                logging.error("  No windows available!")
-                return None
+        # Сохраняем handle текущей вкладки (теперь это вкладка с Medium)
+        profile.medium_window_handle = profile.driver.current_window_handle
+        logging.info("  Medium window handle saved: %s", profile.medium_window_handle)
         
         # Проверяем, что мы на правильной странице
         current_url = profile.driver.current_url
-        logging.info("  Current URL after switch: %s", current_url)
+        logging.info("  Current URL: %s", current_url)
         
-        # Если мы всё ещё на about:blank, пробуем просто перейти на URL
-        if 'about:blank' in current_url or 'medium.com' not in current_url:
-            logging.info("  URL not loaded correctly, trying driver.get()...")
+        # Проверяем, что URL правильный
+        if 'medium.com' not in current_url:
+            logging.warning("  URL doesn't contain 'medium.com', retrying...")
             profile.driver.get(MEDIUM_NEW_STORY_URL)
             time.sleep(2)
-            logging.info("  Current URL after get(): %s", profile.driver.current_url)
+            current_url = profile.driver.current_url
+            logging.info("  Current URL after retry: %s", current_url)
+            profile.medium_window_handle = profile.driver.current_window_handle
         
         # Ждём 10 секунд для загрузки страницы перед началом PyAutoGUI цикла
         logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
@@ -821,14 +805,36 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("Hashtags: %s", hashtags)
         logging.info("")
         
-        # Шаг 1: Убеждаемся, что окно профиля активно (URL уже открыт через Selenium в open_ads_power_profile)
+        # Шаг 1: Убеждаемся, что окно профиля активно и мы на правильной вкладке
         logging.info("="*60)
-        logging.info("STEP 1: Ensuring profile window is active...")
+        logging.info("STEP 1: Ensuring profile window is active and on Medium tab...")
         try:
             # Убеждаемся, что окно профиля активно
             profile_no = get_profile_no(profile_id)
             focus_profile_window(profile_no)
             time.sleep(1)  # Даём время на активацию
+            
+            # Убеждаемся, что мы на правильной вкладке с Medium
+            profile = profiles[profile_no]
+            if profile.driver and profile.medium_window_handle:
+                try:
+                    # Переключаемся на вкладку с Medium
+                    profile.driver.switch_to.window(profile.medium_window_handle)
+                    current_url = profile.driver.current_url
+                    logging.info("  Current URL on Medium tab: %s", current_url)
+                    
+                    # Если мы не на Medium, переходим на Medium
+                    if 'medium.com' not in current_url:
+                        logging.warning("  Not on Medium page, navigating to Medium...")
+                        profile.driver.get(MEDIUM_NEW_STORY_URL)
+                        time.sleep(2)
+                        profile.medium_window_handle = profile.driver.current_window_handle
+                except Exception as e:
+                    logging.warning("  Failed to switch to Medium tab: %s, trying to navigate...", e)
+                    if profile.driver:
+                        profile.driver.get(MEDIUM_NEW_STORY_URL)
+                        time.sleep(2)
+                        profile.medium_window_handle = profile.driver.current_window_handle
             
             logging.info("  ✓ Profile window is active (Medium URL already opened via Selenium)")
         except Exception as e:
@@ -953,27 +959,48 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 9", 10.0)
         logging.info("  ✓ Publication should be complete")
         
-        # Шаг 10: Выделяем адресную строку через Ctrl+L
-        logging.info("STEP 10: Selecting URL bar with Ctrl+L...")
+        # Шаг 10: Получаем URL через Selenium (более надежно, чем через PyAutoGUI)
+        logging.info("STEP 10: Getting published article URL via Selenium...")
         try:
-            pyautogui.hotkey('ctrl', 'l')
-            logging.info("  ✓ URL bar selected successfully")
+            profile_no = get_profile_no(profile_id)
+            profile = profiles[profile_no]
+            
+            # Убеждаемся, что мы на правильной вкладке с Medium
+            if profile.driver and profile.medium_window_handle:
+                try:
+                    profile.driver.switch_to.window(profile.medium_window_handle)
+                except:
+                    # Если не удалось переключиться, пробуем найти вкладку с Medium
+                    all_windows = profile.driver.window_handles
+                    for window in all_windows:
+                        profile.driver.switch_to.window(window)
+                        current_url = profile.driver.current_url
+                        if 'medium.com' in current_url and '/@' in current_url:
+                            # Это опубликованная статья (URL содержит /@username/article-slug)
+                            profile.medium_window_handle = window
+                            break
+                    else:
+                        # Если не нашли, используем последнюю вкладку
+                        if all_windows:
+                            profile.driver.switch_to.window(all_windows[-1])
+            
+            # Получаем URL через Selenium
+            if profile.driver:
+                url = profile.driver.current_url
+                logging.info("  ✓ URL retrieved via Selenium")
+                logging.info("  Retrieved URL: %s", url)
+            else:
+                # Fallback: используем PyAutoGUI
+                logging.warning("  Driver not available, using PyAutoGUI fallback...")
+                pyautogui.hotkey('ctrl', 'l')
+                time.sleep(0.5)
+                pyautogui.hotkey('ctrl', 'c')
+                time.sleep(1)
+                url = pyperclip.paste()
+                logging.info("  ✓ URL copied from clipboard (fallback)")
+                logging.info("  Retrieved URL: %s", url)
         except Exception as e:
-            logging.error("  ✗ Failed to select URL bar: %s", e)
-            return None
-        
-        wait_with_log(WAIT_AFTER_URL_BAR_CLICK, "STEP 10", 10.0)
-        
-        # Шаг 11: Копируем URL (Ctrl+C)
-        logging.info("STEP 11: Copying URL (Ctrl+C)...")
-        try:
-            pyautogui.hotkey('ctrl', 'c')
-            wait_with_log(WAIT_AFTER_COPY, "STEP 11", 10.0)
-            url = pyperclip.paste()
-            logging.info("  ✓ URL copied from clipboard")
-            logging.info("  Retrieved URL: %s", url)
-        except Exception as e:
-            logging.error("  ✗ Failed to copy URL: %s", e)
+            logging.error("  ✗ Failed to get URL: %s", e)
             return None
         
         # Шаг 13: Проверяем и возвращаем URL
