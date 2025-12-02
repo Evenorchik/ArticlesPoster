@@ -351,53 +351,71 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
         return None
 
 
-def ensure_browser_window_active(profile_id: str) -> bool:
+def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> bool:
     """
     Убеждается, что окно браузера профиля активно и развёрнуто.
-    Используется только для максимизации уже открытого окна (профиль открыт через API).
+    Ждёт появления окна (если его ещё нет) и активирует его.
     Возвращает True если успешно, False в противном случае.
     """
     profile_no = get_profile_no(profile_id)
-    logging.debug("Ensuring browser window is active for profile ID: %s (No: %s)", profile_id, profile_no)
+    logging.info("Ensuring browser window is active for profile ID: %s (No: %s)", profile_id, profile_no)
     
-    # Пробуем найти и максимизировать окно браузера
     try:
         import pygetwindow as gw
         
-        # Ищем окна браузера (Chrome, Edge и т.д.)
-        browser_windows = []
-        all_windows = gw.getAllWindows()
+        # Ждём появления окна браузера (максимум wait_seconds секунд)
+        browser_window = None
+        start_time = time.time()
         
-        for window in all_windows:
-            if not window.visible or not window.title.strip():
-                continue
-                
-            title = window.title.lower()
-            # Ищем окна браузера, но не системные диалоги
-            if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera', 'chromium']):
-                # Исключаем системные окна и диалоги
-                if 'dialog' not in title and 'popup' not in title:
-                    browser_windows.append(window)
-        
-        if browser_windows:
-            # Сортируем окна по размеру (большие окна обычно и есть профили)
-            browser_windows.sort(key=lambda w: w.width * w.height, reverse=True)
+        while time.time() - start_time < wait_seconds:
+            # Ищем окна браузера (Chrome, Edge и т.д.)
+            browser_windows = []
+            all_windows = gw.getAllWindows()
             
-            # Максимизируем самое большое окно браузера
-            window = browser_windows[0]
-            window.maximize()
-            time.sleep(0.3)  # Даём время на максимизацию
-            logging.debug("✓ Browser window maximized: %s", window.title)
-            return True
+            for window in all_windows:
+                if not window.visible or not window.title.strip():
+                    continue
+                    
+                title = window.title.lower()
+                # Ищем окна браузера, но не системные диалоги
+                if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera', 'chromium']):
+                    # Исключаем системные окна и диалоги
+                    if 'dialog' not in title and 'popup' not in title:
+                        browser_windows.append(window)
+            
+            if browser_windows:
+                # Сортируем окна по размеру (большие окна обычно и есть профили)
+                browser_windows.sort(key=lambda w: w.width * w.height, reverse=True)
+                browser_window = browser_windows[0]
+                logging.debug("  Found browser window: %s (size: %dx%d)", 
+                            browser_window.title, browser_window.width, browser_window.height)
+                break
+            
+            # Ждём немного перед следующей попыткой
+            time.sleep(0.5)
+        
+        if browser_window:
+            # Активируем и максимизируем окно
+            try:
+                browser_window.activate()
+                time.sleep(0.5)  # Даём время на активацию
+                browser_window.maximize()
+                time.sleep(0.3)  # Даём время на максимизацию
+                logging.info("✓ Browser window activated and maximized: %s", browser_window.title)
+                return True
+            except Exception as e:
+                logging.warning("  Failed to activate/maximize window: %s", e)
+                return False
         else:
-            logging.debug("No browser windows found (window may not be open yet)")
+            logging.warning("  No browser windows found after %d seconds", wait_seconds)
             return False
             
     except ImportError:
-        logging.debug("pygetwindow not available, skipping window maximization")
+        logging.warning("pygetwindow not available, cannot activate window")
+        logging.info("Please install: pip install pygetwindow")
         return False
     except Exception as e:
-        logging.debug("Failed to maximize window: %s", e)
+        logging.warning("Failed to ensure window is active: %s", e)
         return False
 
 
@@ -495,29 +513,45 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             
             if data.get("code") == 0:
                 logging.info("✓ Profile ID %s (No: %s) opened successfully", profile_id, profile_no)
-                # Ждём немного, чтобы браузер успел открыться
-                time.sleep(3)
                 
-                # Открываем URL в открытом профиле через PyAutoGUI
-                try:
-                    # Активируем окно профиля
-                    ensure_browser_window_active(profile_id)
-                    time.sleep(1)
-                    # Фокусируем адресную строку браузера
-                    pyautogui.hotkey('ctrl', 'l')
-                    time.sleep(0.5)
-                    # Очищаем адресную строку
-                    pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.2)
-                    # Вводим URL
-                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-                    time.sleep(0.5)
-                    # Нажимаем Enter
-                    pyautogui.press('enter')
-                    time.sleep(1)  # Даём время на начало загрузки
-                    logging.info("✓ URL opened in AdsPower profile browser")
-                except Exception as e:
-                    logging.warning("Failed to open URL in AdsPower browser: %s", e)
+                # Ждём появления и активируем окно браузера (максимум 15 секунд)
+                logging.info("Waiting for browser window to appear and activating it...")
+                if ensure_browser_window_active(profile_id, wait_seconds=15):
+                    time.sleep(1)  # Дополнительная пауза после активации
+                    
+                    # Открываем URL в открытом профиле через PyAutoGUI
+                    try:
+                        logging.info("Opening URL in active browser window...")
+                        # Фокусируем адресную строку браузера
+                        pyautogui.hotkey('ctrl', 'l')
+                        time.sleep(0.5)
+                        # Очищаем адресную строку
+                        pyautogui.hotkey('ctrl', 'a')
+                        time.sleep(0.2)
+                        # Вводим URL
+                        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+                        time.sleep(0.5)
+                        # Нажимаем Enter
+                        pyautogui.press('enter')
+                        time.sleep(1)  # Даём время на начало загрузки
+                        logging.info("✓ URL opened in AdsPower profile browser")
+                    except Exception as e:
+                        logging.warning("Failed to open URL in AdsPower browser: %s", e)
+                else:
+                    logging.warning("Failed to activate browser window, but trying to open URL anyway...")
+                    # Пробуем открыть URL даже если активация не удалась
+                    try:
+                        pyautogui.hotkey('ctrl', 'l')
+                        time.sleep(0.5)
+                        pyautogui.hotkey('ctrl', 'a')
+                        time.sleep(0.2)
+                        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+                        time.sleep(0.5)
+                        pyautogui.press('enter')
+                        time.sleep(1)
+                        logging.info("✓ URL opened (window activation may have failed)")
+                    except Exception as e:
+                        logging.warning("Failed to open URL: %s", e)
                 
                 return profile_id
             else:
@@ -627,7 +661,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  URL: %s", MEDIUM_NEW_STORY_URL)
         try:
             # Убеждаемся, что окно профиля активно
-            activate_ads_power_profile(profile_id)
+            ensure_browser_window_active(profile_id)
             time.sleep(1)  # Даём больше времени на активацию
             
             # Фокусируем адресную строку браузера (Ctrl+L)
