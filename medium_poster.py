@@ -9,7 +9,6 @@ import random
 import requests
 import pyautogui
 import pyperclip
-import webbrowser
 from typing import Optional, List, Dict
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -38,7 +37,7 @@ except ImportError:
 # Config
 from config import POSTGRES_DSN, LOG_LEVEL
 
-# Логирование
+# Logs
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -72,7 +71,6 @@ COORDS_TITLE_INPUT = (516, 215)      # Шаг 3: ввод текста (title)
 COORDS_PUBLISH_BUTTON_1 = (1180, 119)  # Шаг 7: первая кнопка Publish
 COORDS_HASHTAGS_INPUT = (941, 392)   # Шаг 8: поле ввода хэштегов
 COORDS_PUBLISH_BUTTON_2 = (925, 553) # Шаг 10: финальная кнопка Publish
-COORDS_URL_BAR = (479, 60)          # Шаг 11: клик на строку браузера
 
 # Задержки (базовые значения, будут рандомизированы)
 WAIT_AFTER_OPEN_TAB = 10  # Шаг 2: ждём 10 секунд после открытия вкладки
@@ -84,7 +82,6 @@ WAIT_AFTER_PUBLISH_1 = 3  # Шаг 7: ждём 3 секунды после пе�
 WAIT_AFTER_HASHTAGS_CLICK = 1  # Шаг 8: ждём 1 секунду после клика на поле хэштегов
 WAIT_BETWEEN_HASHTAGS = 1  # Шаг 9: ждём 1 секунду между хэштегами
 WAIT_AFTER_PUBLISH_2 = 15  # Шаг 10: ждём 15 секунд после финальной кнопки Publish
-WAIT_AFTER_URL_BAR_CLICK = 1  # Шаг 11: ждём 1 секунду после клика на адресную строку
 WAIT_AFTER_COPY = 1  # Шаг 12: ждём 1 секунду после Ctrl+C
 
 # Настройка PyAutoGUI
@@ -576,99 +573,6 @@ def minimize_profile_window(profile_no: int) -> bool:
         return False
 
 
-def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> bool:
-    """
-    Находит окно браузера профиля и разворачивает его на весь экран.
-    Профиль уже запущен через Ads Power API, нужно просто развернуть окно.
-    """
-    profile_no = get_profile_no(profile_id)
-    logging.info("Finding and maximizing browser window for profile ID: %s (No: %s)", profile_id, profile_no)
-    
-    try:
-        import pygetwindow as gw
-        
-        # Ждём появления окна браузера (максимум wait_seconds секунд)
-        browser_window = None
-        start_time = time.time()
-        
-        while time.time() - start_time < wait_seconds:
-            # Ищем окна браузера (Chrome, Edge и т.д.)
-            # ВАЖНО: не проверяем window.visible, чтобы находить и свёрнутые окна
-            browser_windows = []
-            all_windows = gw.getAllWindows()
-            
-            for window in all_windows:
-                if not window.title.strip():
-                    continue
-                    
-                title = window.title.lower()
-                # Ищем окна браузера, но не системные диалоги
-                if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera', 'chromium']):
-                    # Исключаем системные окна и диалоги
-                    if 'dialog' not in title and 'popup' not in title:
-                        browser_windows.append(window)
-                        logging.debug("  Found potential browser window: %s (visible: %s, size: %dx%d)", 
-                                    window.title, window.visible, window.width, window.height)
-            
-            if browser_windows:
-                # Сортируем окна по размеру (большие окна обычно и есть профили)
-                browser_windows.sort(key=lambda w: w.width * w.height, reverse=True)
-                browser_window = browser_windows[0]
-                logging.debug("  Found browser window: %s", browser_window.title)
-                break
-            
-            # Ждём немного перед следующей попыткой
-            time.sleep(0.5)
-        
-        if browser_window:
-            try:
-                logging.info("  Window found: %s (position: %d,%d, size: %dx%d, visible: %s)", 
-                           browser_window.title, browser_window.left, browser_window.top, 
-                           browser_window.width, browser_window.height, browser_window.visible)
-                
-                # Если окно свёрнуто или очень маленькое, сначала восстанавливаем его
-                if not browser_window.visible or browser_window.width < 100 or browser_window.height < 100:
-                    logging.debug("  Window appears minimized, trying to restore first...")
-                    try:
-                        # Пробуем восстановить через pygetwindow
-                        browser_window.restore()
-                        time.sleep(0.5)
-                        # Обновляем информацию об окне
-                        browser_window = gw.getWindowsWithTitle(browser_window.title)[0] if gw.getWindowsWithTitle(browser_window.title) else browser_window
-                    except Exception as restore_err:
-                        logging.debug("  Restore via pygetwindow failed: %s, will try Alt+Space+R", restore_err)
-                
-                # Активируем окно - кликаем по нему
-                center_x = browser_window.left + max(browser_window.width // 2, 50)
-                center_y = browser_window.top + max(browser_window.height // 2, 50)
-                logging.debug("  Clicking on window at (%d, %d) to activate", center_x, center_y)
-                pyautogui.click(center_x, center_y)
-                time.sleep(0.5)
-                
-                # Разворачиваем через Alt+Space+X
-                logging.debug("  Maximizing window via Alt+Space+X")
-                pyautogui.hotkey('alt', 'space')
-                time.sleep(0.3)
-                pyautogui.press('x')
-                time.sleep(0.5)
-                
-                logging.info("✓ Browser window maximized: %s", browser_window.title)
-                return True
-            except Exception as e:
-                logging.warning("  Failed to maximize window: %s", e)
-                return False
-        else:
-            logging.warning("  No browser windows found after %d seconds", wait_seconds)
-            return False
-            
-    except ImportError:
-        logging.warning("pygetwindow not available, cannot find window")
-        return False
-    except Exception as e:
-        logging.warning("Failed to find/maximize window: %s", e)
-        return False
-
-
 def open_ads_power_profile(profile_id: str) -> Optional[str]:
     """
     Открывает или активирует профиль Ads Power через новую логику с Selenium и window_tag.
@@ -750,34 +654,6 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         return None
     
     return profile_id
-
-
-def close_ads_power_profile(profile_id: int) -> bool:
-    """Закрывает профиль Ads Power через API."""
-    logging.debug("Closing Ads Power profile ID: %s", profile_id)
-    
-    url = f"{ADS_POWER_API_URL}/api/v1/user/stop"
-    headers = {
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "user_ids": [str(profile_id)]
-    }
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("code") == 0:
-            logging.debug("✓ Profile %s closed successfully", profile_id)
-            return True
-        else:
-            logging.warning("Ads Power API warning when closing profile %s: %s", profile_id, data.get("msg"))
-            return False
-    except Exception as e:
-        logging.warning("Failed to close Ads Power profile %s: %s", profile_id, e)
-        return False
 
 
 def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
