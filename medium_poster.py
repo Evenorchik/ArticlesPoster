@@ -9,9 +9,18 @@ import random
 import requests
 import pyautogui
 import pyperclip
+import re
 from typing import Optional, List, Dict
 from contextlib import closing
 from dataclasses import dataclass, field
+
+# Markdown
+try:
+    import markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
+    logging.warning("Markdown not available. Install with: pip install markdown")
 
 # Selenium
 try:
@@ -63,6 +72,24 @@ PROFILE_MAPPING = {
     "k107wyp0": 126,
 }
 
+# Последовательная нумерация профилей от 1 до 10
+# Формат: {profile_no: sequential_no}
+PROFILE_SEQUENTIAL_MAPPING = {
+    70: 1,
+    74: 2,
+    80: 3,
+    89: 4,
+    90: 5,
+    91: 6,
+    92: 7,
+    93: 8,
+    125: 9,
+    126: 10,
+}
+
+# Обратный маппинг sequential_no -> profile_no
+SEQUENTIAL_TO_PROFILE_NO = {v: k for k, v in PROFILE_SEQUENTIAL_MAPPING.items()}
+
 # ID профилей Ads Power (циклический перебор) - используем profile_id для API
 PROFILE_IDS = list(PROFILE_MAPPING.keys())
 
@@ -97,9 +124,11 @@ class Profile:
     driver: Optional[object] = None  # Selenium WebDriver
     window_tag: str = field(init=False)
     medium_window_handle: Optional[str] = None  # Handle вкладки с Medium
+    sequential_no: int = field(init=False)  # Последовательный номер (1-10)
     
     def __post_init__(self):
         self.window_tag = f"ADS_PROFILE_{self.profile_no}"
+        self.sequential_no = get_sequential_no(self.profile_no) or 0
 
 # Глобальный словарь профилей: {profile_no: Profile}
 profiles: Dict[int, Profile] = {}
@@ -322,12 +351,196 @@ def get_profile_no(profile_id: str) -> int:
     """Возвращает profile_no для profile_id (для логов)."""
     return PROFILE_MAPPING.get(profile_id, 0)
 
+def format_profile_info(profile_id: str, profile_no: int) -> str:
+    """Форматирует информацию о профиле для логов: ID (No: X, Seq: Y)."""
+    sequential_no = get_sequential_no(profile_no)
+    if sequential_no:
+        return f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
+    return f"{profile_id} (No: {profile_no})"
+
 def get_profile_id(profile_no: int) -> Optional[str]:
     """Получает profile_id из profile_no используя обратный маппинг."""
     for pid, pno in PROFILE_MAPPING.items():
         if pno == profile_no:
             return pid
     return None
+
+def get_sequential_no(profile_no: int) -> Optional[int]:
+    """Получает последовательный номер профиля (1-10) из profile_no."""
+    return PROFILE_SEQUENTIAL_MAPPING.get(profile_no)
+
+def get_profile_no_from_sequential(sequential_no: int) -> Optional[int]:
+    """Получает profile_no из последовательного номера (1-10)."""
+    return SEQUENTIAL_TO_PROFILE_NO.get(sequential_no)
+
+
+def markdown_to_html(markdown_text: str) -> str:
+    """
+    Конвертирует Markdown в HTML.
+    На вход: строка с Markdown-разметкой.
+    На выход: HTML-фрагмент (без <html><body> обёрток).
+    """
+    if not MARKDOWN_AVAILABLE:
+        logging.warning("Markdown library not available, returning plain text wrapped in <p> tags")
+        # Fallback: просто оборачиваем в <p> теги
+        paragraphs = markdown_text.split('\n\n')
+        html_parts = []
+        for para in paragraphs:
+            para = para.strip()
+            if para:
+                html_parts.append(f"<p>{para}</p>")
+        return '\n'.join(html_parts)
+    
+    try:
+        # Используем markdown с расширениями для лучшей поддержки
+        md = markdown.Markdown(extensions=['extra', 'nl2br', 'sane_lists'])
+        html = md.convert(markdown_text)
+        
+        # Очищаем результат от лишних обёрток, если они есть
+        # Убираем <html> и <body> теги, если парсер их добавил
+        html = re.sub(r'^<html[^>]*>', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'</html>$', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'^<body[^>]*>', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'</body>$', '', html, flags=re.IGNORECASE)
+        html = html.strip()
+        
+        logging.debug("Markdown converted to HTML (length: %d chars)", len(html))
+        return html
+    except Exception as e:
+        logging.error("Error converting Markdown to HTML: %s", e)
+        # Fallback: возвращаем текст в <p> тегах
+        paragraphs = markdown_text.split('\n\n')
+        html_parts = []
+        for para in paragraphs:
+            para = para.strip()
+            if para:
+                html_parts.append(f"<p>{para}</p>")
+        return '\n'.join(html_parts)
+
+
+def html_to_plain_text(html: str) -> str:
+    """
+    Извлекает plain text из HTML (убирает все теги).
+    """
+    # Простое удаление HTML тегов
+    text = re.sub(r'<[^>]+>', '', html)
+    # Декодируем HTML entities (если есть)
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&quot;', '"')
+    text = text.replace('&#39;', "'")
+    # Нормализуем пробелы
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    return text.strip()
+
+
+def prepare_cf_html(html_fragment: str) -> str:
+    """
+    Подготавливает HTML для формата CF_HTML (Windows clipboard format).
+    CF_HTML имеет специальную структуру с заголовком и позицией фрагмента.
+    """
+    # Базовый HTML с DOCTYPE и т.д.
+    html_start = """<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<HTML><HEAD><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></HEAD><BODY>"""
+    
+    # Маркер начала фрагмента
+    fragment_start_marker = "<!--StartFragment-->"
+    # Маркер конца фрагмента
+    fragment_end_marker = "<!--EndFragment-->"
+    
+    html_end = "</BODY></HTML>"
+    
+    # Собираем полный HTML (без заголовка пока)
+    full_html = html_start + fragment_start_marker + html_fragment + fragment_end_marker + html_end
+    
+    # Вычисляем позиции относительно начала полного HTML
+    start_html_pos = len(html_start)
+    start_fragment_pos = start_html_pos + len(fragment_start_marker)
+    end_fragment_pos = start_fragment_pos + len(html_fragment)
+    end_html_pos = end_fragment_pos + len(fragment_end_marker) + len(html_end)
+    
+    # Формируем заголовок CF_HTML
+    header = f"""Version:0.9
+StartHTML:{start_html_pos:09d}
+EndHTML:{end_html_pos:09d}
+StartFragment:{start_fragment_pos:09d}
+EndFragment:{end_fragment_pos:09d}
+"""
+    
+    # Вычисляем реальные позиции с учётом заголовка
+    header_len = len(header)
+    start_html_pos_final = header_len + start_html_pos
+    end_html_pos_final = header_len + end_html_pos
+    start_fragment_pos_final = header_len + start_fragment_pos
+    end_fragment_pos_final = header_len + end_fragment_pos
+    
+    # Формируем финальный CF_HTML с правильными позициями
+    cf_html = f"""Version:0.9
+StartHTML:{start_html_pos_final:09d}
+EndHTML:{end_html_pos_final:09d}
+StartFragment:{start_fragment_pos_final:09d}
+EndFragment:{end_fragment_pos_final:09d}
+{full_html}"""
+    
+    return cf_html
+
+
+def copy_markdown_as_rich_text(markdown_text: str) -> bool:
+    """
+    Конвертирует Markdown в HTML и копирует в буфер обмена как Rich Text (HTML).
+    Использует формат CF_HTML для Windows clipboard.
+    """
+    try:
+        # Шаг 1: Markdown → HTML
+        html_fragment = markdown_to_html(markdown_text)
+        
+        # Шаг 2: Извлекаем plain text для подстраховки
+        plain_text = html_to_plain_text(html_fragment)
+        
+        # Шаг 3: Подготавливаем CF_HTML формат
+        cf_html = prepare_cf_html(html_fragment)
+        
+        # Шаг 4: Копируем в буфер обмена
+        # Используем pyperclip для HTML (он поддерживает HTML формат)
+        # Но для гарантии используем прямой доступ к Windows clipboard через win32clipboard
+        try:
+            import win32clipboard
+            import win32con
+            
+            # Открываем буфер обмена
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            
+            # Устанавливаем HTML формат (CF_HTML)
+            win32clipboard.SetClipboardData(win32con.CF_HTML, cf_html.encode('utf-8'))
+            
+            # Также устанавливаем plain text для совместимости
+            win32clipboard.SetClipboardData(win32con.CF_TEXT, plain_text.encode('utf-8'))
+            
+            # Закрываем буфер обмена
+            win32clipboard.CloseClipboard()
+            
+            logging.debug("Markdown copied to clipboard as Rich Text (HTML format)")
+            return True
+        except ImportError:
+            # Fallback: используем pyperclip (может не поддерживать HTML напрямую)
+            logging.warning("win32clipboard not available, using pyperclip fallback (may not preserve formatting)")
+            pyperclip.copy(html_fragment)
+            return True
+        except Exception as e:
+            logging.error("Error copying to clipboard: %s", e)
+            # Fallback: используем pyperclip
+            pyperclip.copy(html_fragment)
+            return True
+            
+    except Exception as e:
+        logging.error("Error in copy_markdown_as_rich_text: %s", e)
+        # Fallback: просто копируем как текст
+        pyperclip.copy(markdown_text)
+        return False
 
 
 def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
@@ -580,7 +793,9 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
     Возвращает profile_id или None в случае ошибки.
     """
     profile_no = get_profile_no(profile_id)
-    logging.info("Opening/activating Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
+    sequential_no = get_sequential_no(profile_no)
+    profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+    logging.info("Opening/activating Ads Power profile: %s", profile_info)
     
     # Подготавливаем профиль (запускаем через API, создаём Selenium драйвер, устанавливаем window_tag)
     if not ensure_profile_ready(profile_no):
@@ -664,7 +879,9 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     article_id = article.get('id') if isinstance(article, dict) else article[0]
     profile_no = get_profile_no(profile_id)
     logging.info("="*60)
-    logging.info("Posting article ID %s using profile ID %s (No: %s)", article_id, profile_id, profile_no)
+        sequential_no = get_sequential_no(profile_no)
+        profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+        logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
     logging.info("="*60)
     
     try:
@@ -772,14 +989,18 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         
         wait_with_log(WAIT_AFTER_ENTER, "STEP 4", 10.0)
         
-        # Шаг 5: Вставляем body
-        logging.info("STEP 5: Pasting body...")
+        # Шаг 5: Вставляем body как Rich Text (HTML)
+        logging.info("STEP 5: Pasting body as Rich Text (HTML)...")
         logging.info("  Body length: %d characters", len(body))
         try:
-            pyperclip.copy(body)
+            # Конвертируем Markdown в HTML и копируем как Rich Text
+            if not copy_markdown_as_rich_text(body):
+                logging.warning("  Failed to copy as Rich Text, falling back to plain text")
+                pyperclip.copy(body)
+            
             time.sleep(0.2)
             pyautogui.hotkey('ctrl', 'v')
-            logging.info("  ✓ Body pasted successfully")
+            logging.info("  ✓ Body pasted successfully as Rich Text")
         except Exception as e:
             logging.error("  ✗ Failed to paste body: %s", e)
             return None
@@ -1017,13 +1238,17 @@ def main():
             
             logging.info("")
             logging.info("="*60)
-            logging.info("Processing article ID %s with profile ID %s (No: %s)", article_id, profile_id, profile_no)
+            sequential_no = get_sequential_no(profile_no)
+            profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+            logging.info("Processing article ID %s with profile: %s", article_id, profile_info)
             logging.info("="*60)
             
             # Открываем профиль Ads Power
             result = open_ads_power_profile(profile_id)
             if not result:
-                logging.error("Failed to open profile ID %s (No: %s), skipping article ID %s", profile_id, profile_no, article_id)
+                sequential_no = get_sequential_no(profile_no)
+                profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+                logging.error("Failed to open profile: %s, skipping article ID %s", profile_info, article_id)
                 failed_count += 1
                 continue
             
