@@ -688,9 +688,24 @@ def ensure_profile_ready(profile_no: int) -> bool:
             time.sleep(0.2)
         
         # Устанавливаем уникальный window_tag через document.title
-        driver.get("about:blank")
-        driver.execute_script(f"document.title = '{profile.window_tag}';")
-        time.sleep(0.5)
+        # Используем первую доступную вкладку
+        try:
+            # Получаем все открытые вкладки
+            all_handles = driver.window_handles
+            if all_handles:
+                # Переключаемся на первую вкладку
+                driver.switch_to.window(all_handles[0])
+                # Устанавливаем window_tag
+                driver.get("about:blank")
+                driver.execute_script(f"document.title = '{profile.window_tag}';")
+                time.sleep(0.5)
+            else:
+                # Если вкладок нет, открываем новую
+                driver.get("about:blank")
+                driver.execute_script(f"document.title = '{profile.window_tag}';")
+                time.sleep(0.5)
+        except Exception as tag_err:
+            logging.warning("  Failed to set window_tag: %s, but continuing...", tag_err)
         
         profile.driver = driver
         logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
@@ -812,22 +827,50 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             logging.error("Driver not available for profile %d", profile_no)
             return None
         
-        # Сохраняем текущую вкладку (about:blank с window_tag)
-        original_window = profile.driver.current_window_handle
-        logging.debug("  Original window handle: %s", original_window)
+        # Получаем все открытые вкладки
+        all_handles = profile.driver.window_handles
+        logging.debug("  Available window handles: %s", all_handles)
+        
+        if not all_handles:
+            logging.error("  No window handles available!")
+            return None
+        
+        # Переключаемся на первую вкладку (или ту, где установлен window_tag)
+        try:
+            # Пробуем найти вкладку с window_tag
+            target_handle = None
+            for handle in all_handles:
+                profile.driver.switch_to.window(handle)
+                try:
+                    title = profile.driver.title
+                    if profile.window_tag in title:
+                        target_handle = handle
+                        break
+                except:
+                    pass
+            
+            if target_handle:
+                profile.driver.switch_to.window(target_handle)
+                logging.debug("  Switched to window with tag: %s", profile.window_tag)
+            else:
+                # Используем первую вкладку
+                profile.driver.switch_to.window(all_handles[0])
+                logging.debug("  Switched to first available window")
+        except Exception as switch_err:
+            logging.warning("  Failed to switch window: %s, using current window", switch_err)
         
         # Переходим на Medium в текущей вкладке
-        logging.info("  Navigating to Medium URL in current tab...")
-        profile.driver.get(MEDIUM_NEW_STORY_URL)
-        time.sleep(2)  # Даём время на загрузку
+        logging.info("  Navigating to Medium URL: %s", MEDIUM_NEW_STORY_URL)
+        try:
+            profile.driver.get(MEDIUM_NEW_STORY_URL)
+            time.sleep(3)  # Даём время на загрузку
+        except Exception as nav_err:
+            logging.error("  Failed to navigate to Medium URL: %s", nav_err)
+            return None
         
         # Сохраняем handle текущей вкладки (теперь это вкладка с Medium)
         profile.medium_window_handle = profile.driver.current_window_handle
         logging.info("  Medium window handle saved: %s", profile.medium_window_handle)
-        
-        # Явно переключаемся на эту вкладку (на случай, если открылись другие вкладки)
-        profile.driver.switch_to.window(profile.medium_window_handle)
-        logging.info("  Switched to Medium tab")
         
         # Активируем окно браузера через PyAutoGUI, чтобы вкладка была видна и активна
         logging.info("  Activating browser window to make Medium tab visible...")
@@ -835,27 +878,25 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             # Фокусируем окно профиля
             focus_profile_window(profile_no)
             time.sleep(0.5)
-            
-            # Дополнительно: кликаем по вкладке, чтобы она точно была активной
-            # Это можно сделать через клик по координатам вкладки или просто активировать окно
             logging.info("  Browser window activated, Medium tab should be visible")
         except Exception as e:
             logging.warning("  Failed to activate window: %s, but continuing...", e)
         
         # Проверяем, что мы на правильной странице
-        current_url = profile.driver.current_url
-        logging.info("  Current URL: %s", current_url)
-        
-        # Проверяем, что URL правильный
-        if 'medium.com' not in current_url:
-            logging.warning("  URL doesn't contain 'medium.com', retrying...")
-            profile.driver.get(MEDIUM_NEW_STORY_URL)
-            time.sleep(2)
+        try:
             current_url = profile.driver.current_url
-            logging.info("  Current URL after retry: %s", current_url)
-            profile.medium_window_handle = profile.driver.current_window_handle
-            # Снова переключаемся на вкладку
-            profile.driver.switch_to.window(profile.medium_window_handle)
+            logging.info("  Current URL: %s", current_url)
+            
+            # Проверяем, что URL правильный
+            if 'medium.com' not in current_url:
+                logging.warning("  URL doesn't contain 'medium.com', retrying...")
+                profile.driver.get(MEDIUM_NEW_STORY_URL)
+                time.sleep(3)
+                current_url = profile.driver.current_url
+                logging.info("  Current URL after retry: %s", current_url)
+                profile.medium_window_handle = profile.driver.current_window_handle
+        except Exception as url_err:
+            logging.warning("  Failed to get current URL: %s, but continuing...", url_err)
         
         # Ждём 10 секунд для загрузки страницы перед началом PyAutoGUI цикла
         logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
@@ -863,7 +904,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         
         logging.info("✓ URL opened in AdsPower profile browser via Selenium, page loaded")
     except Exception as e:
-        logging.warning("Failed to open URL in AdsPower browser via Selenium: %s", e)
+        logging.error("Failed to open URL in AdsPower browser via Selenium: %s", e, exc_info=True)
         return None
     
     return profile_id
