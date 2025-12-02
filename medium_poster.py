@@ -38,8 +38,8 @@ MEDIUM_NEW_STORY_URL = "https://medium.com/new-story"
 ADS_POWER_API_URL = "http://local.adspower.net:50325"
 ADS_POWER_API_KEY = "856007acdf241361915ed26a00a6d70b"
 
-# ID профилей Ads Power (циклический перебор)
-PROFILE_IDS = [74, 80, 70, 126, 125, 89, 90, 91, 92, 93]
+# Номера профилей Ads Power (циклический перебор) - это profile_no, не profile_id
+PROFILE_NOS = [74, 80, 70, 126, 125, 89, 90, 91, 92, 93]
 
 # Координаты для кликов (из алгоритма пользователя)
 COORDS_TITLE_INPUT = (516, 215)      # Шаг 3: ввод текста (title)
@@ -279,54 +279,205 @@ def update_article_url_and_profile(pg_conn, table_name: str, article_id: int, ur
         raise
 
 
-def open_ads_power_profile(profile_id: int) -> Optional[str]:
+def check_ads_power_profile_status(profile_no: int) -> Optional[dict]:
     """
-    Открывает профиль Ads Power через API.
-    Возвращает user_id профиля или None в случае ошибки.
+    Проверяет статус профиля Ads Power через API v2.
+    Использует profile_no (номер профиля), не profile_id.
+    Возвращает информацию о профиле или None в случае ошибки.
     """
-    logging.info("Opening Ads Power profile ID: %s", profile_id)
-    logging.debug("  API URL: %s/api/v1/user/start", ADS_POWER_API_URL)
-    logging.debug("  Target URL: %s", MEDIUM_NEW_STORY_URL)
+    logging.debug("Checking status of Ads Power profile No: %s", profile_no)
     
-    url = f"{ADS_POWER_API_URL}/api/v1/user/start"
+    endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/active"
+    
+    # Используем GET запрос с параметром profile_no
+    params = {
+        "profile_no": str(profile_no)
+    }
+    
+    # Формируем заголовки (добавляем API key, если указан)
+    headers = {}
+    if ADS_POWER_API_KEY:
+        headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        logging.debug("  Using API key for authentication")
+    
+    try:
+        logging.debug("  GET request to: %s with params: %s", endpoint, params)
+        response = requests.get(endpoint, params=params, headers=headers, timeout=10)
+        logging.debug("  Response status code: %s", response.status_code)
+        
+        if response.status_code == 200:
+            data = response.json()
+            logging.debug("  Response data: %s", data)
+            
+            if data.get("code") == 0:
+                profile_data = data.get("data", {})
+                status = profile_data.get("status", "Unknown")
+                logging.info("Profile No %s status: %s", profile_no, status)
+                return profile_data
+            else:
+                error_msg = data.get("msg", "Unknown error")
+                logging.debug("  API returned error: %s", error_msg)
+                return None
+        else:
+            logging.debug("  HTTP error: %s", response.status_code)
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        logging.error("✗ Request error checking profile status: %s", e)
+        return None
+    except Exception as e:
+        logging.error("✗ Unexpected error checking profile status: %s", e)
+        return None
+
+
+def activate_ads_power_profile(profile_no: int) -> bool:
+    """
+    Активирует (разворачивает) уже открытый профиль Ads Power.
+    Использует PyAutoGUI для активации окна браузера.
+    Возвращает True если успешно, False в противном случае.
+    """
+    logging.info("Activating Ads Power profile No: %s", profile_no)
+    
+    # Пробуем через PyAutoGUI найти и активировать окно браузера
+    try:
+        import pygetwindow as gw
+        
+        # Ищем окна браузера (Chrome, Edge и т.д.)
+        browser_windows = []
+        for window in gw.getAllWindows():
+            title = window.title.lower()
+            if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera']):
+                if window.visible:
+                    browser_windows.append(window)
+        
+        if browser_windows:
+            # Активируем первое найденное окно браузера
+            window = browser_windows[0]
+            window.activate()
+            window.maximize()
+            logging.info("✓ Profile window activated via PyAutoGUI")
+            return True
+        else:
+            logging.warning("No browser windows found to activate")
+            return False
+            
+    except ImportError:
+        logging.warning("pygetwindow not available, cannot activate window")
+        logging.info("Please install: pip install pygetwindow")
+        return False
+    except Exception as e:
+        logging.warning("Failed to activate window via PyAutoGUI: %s", e)
+        return False
+
+
+def open_ads_power_profile(profile_no: int) -> Optional[str]:
+    """
+    Открывает или активирует профиль Ads Power через API v2.
+    Использует profile_no (номер профиля), не profile_id.
+    Сначала проверяет статус профиля через GET /api/v2/browser-profile/active.
+    Если профиль активен - активирует окно и открывает URL.
+    Если не активен - открывает профиль через POST /api/v2/browser-profile/start.
+    Возвращает profile_no или None в случае ошибки.
+    """
+    logging.info("Opening/activating Ads Power profile No: %s", profile_no)
+    
+    # Шаг 1: Проверяем статус профиля
+    profile_status = check_ads_power_profile_status(profile_no)
+    
+    if profile_status:
+        status = profile_status.get("status", "Unknown")
+        logging.info("Profile No %s status: %s", profile_no, status)
+        
+        if status == "Active":
+            # Профиль уже открыт - активируем окно
+            logging.info("Profile No %s is already active, activating window...", profile_no)
+            if activate_ads_power_profile(profile_no):
+                # Открываем URL в уже открытом профиле через webbrowser
+                logging.info("✓ Profile No %s activated, opening URL...", profile_no)
+                try:
+                    webbrowser.open(MEDIUM_NEW_STORY_URL)
+                    time.sleep(2)  # Даём время на открытие URL
+                except Exception as e:
+                    logging.warning("Failed to open URL via webbrowser: %s", e)
+                
+                return str(profile_no)
+            else:
+                logging.warning("Failed to activate window, but profile is active")
+                return str(profile_no)
+    
+    # Шаг 2: Профиль не активен - открываем его через API v2
+    logging.info("Profile No %s is not active, opening new instance...", profile_no)
+    
+    # Используем правильный endpoint для API v2
+    endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
+    
+    # Формируем заголовки
     headers = {
         "Content-Type": "application/json"
     }
+    
+    # Добавляем API key, если он указан
+    if ADS_POWER_API_KEY:
+        headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        logging.debug("  Using API key for authentication")
+    
+    # Формируем payload с profile_no (в формате строки)
     payload = {
-        "user_id": str(profile_id),
-        "open_urls": [MEDIUM_NEW_STORY_URL],
-        "headless": False
+        "profile_no": str(profile_no)
     }
     
     try:
-        logging.debug("  Sending POST request to Ads Power API...")
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        logging.debug("  Response status code: %s", response.status_code)
-        response.raise_for_status()
-        data = response.json()
-        logging.debug("  Response data: %s", data)
+        logging.debug("  POST request to: %s", endpoint)
+        logging.debug("  Headers: %s", {k: v if k != "Authorization" else "Bearer ***" for k, v in headers.items()})
+        logging.debug("  Payload: %s", payload)
         
-        if data.get("code") == 0:
-            user_id = data.get("data", {}).get("id")
-            logging.info("✓ Profile %s opened successfully (user_id: %s)", profile_id, user_id)
-            return user_id
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+        logging.debug("  Response status code: %s", response.status_code)
+        
+        if response.status_code == 200:
+            data = response.json()
+            logging.debug("  Response data: %s", data)
+            
+            if data.get("code") == 0:
+                logging.info("✓ Profile No %s opened successfully", profile_no)
+                # Ждём немного, чтобы браузер успел открыться
+                time.sleep(3)
+                
+                # Открываем URL в открытом профиле
+                try:
+                    webbrowser.open(MEDIUM_NEW_STORY_URL)
+                    time.sleep(2)
+                except Exception as e:
+                    logging.warning("Failed to open URL via webbrowser: %s", e)
+                
+                return str(profile_no)
+            else:
+                error_msg = data.get("msg", data.get("message", "Unknown error"))
+                error_code = data.get("code", "N/A")
+                logging.error("✗ Ads Power API error (code: %s): %s", error_code, error_msg)
+                return None
         else:
-            error_msg = data.get("msg", "Unknown error")
-            error_code = data.get("code", "N/A")
-            logging.error("✗ Ads Power API error (code: %s): %s", error_code, error_msg)
+            logging.error("✗ HTTP error: %s", response.status_code)
+            try:
+                error_data = response.json()
+                logging.error("  Error response: %s", error_data)
+            except:
+                logging.error("  Error response (text): %s", response.text)
             return None
+            
     except requests.exceptions.Timeout:
-        logging.error("✗ Timeout while opening Ads Power profile %s (request took >30s)", profile_id)
+        logging.error("✗ Timeout while opening profile (request took >30s)")
         return None
     except requests.exceptions.ConnectionError as e:
-        logging.error("✗ Connection error while opening Ads Power profile %s: %s", profile_id, e)
-        logging.error("  Make sure Ads Power is running and API is accessible at %s", ADS_POWER_API_URL)
+        logging.error("✗ Connection error: %s", e)
+        logging.error("  Make sure Ads Power is running and Local API is enabled")
+        logging.error("  Check API URL: %s", ADS_POWER_API_URL)
         return None
     except requests.exceptions.RequestException as e:
-        logging.error("✗ Request error while opening Ads Power profile %s: %s", profile_id, e)
+        logging.error("✗ Request error: %s", e)
         return None
     except Exception as e:
-        logging.error("✗ Unexpected error opening profile %s: %s", profile_id, e, exc_info=True)
+        logging.error("✗ Unexpected error: %s", e, exc_info=True)
         return None
 
 
@@ -358,14 +509,14 @@ def close_ads_power_profile(profile_id: int) -> bool:
         return False
 
 
-def post_article_to_medium(article: dict, profile_id: int) -> Optional[str]:
+def post_article_to_medium(article: dict, profile_no: int) -> Optional[str]:
     """
     Публикует статью на Medium через PyAutoGUI.
     Возвращает URL опубликованной статьи или None в случае ошибки.
     """
     article_id = article.get('id') if isinstance(article, dict) else article[0]
     logging.info("="*60)
-    logging.info("Posting article ID %s using profile %s", article_id, profile_id)
+    logging.info("Posting article ID %s using profile No %s", article_id, profile_no)
     logging.info("="*60)
     
     try:
@@ -665,18 +816,18 @@ def main():
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             
             # Выбираем профиль (циклический перебор)
-            profile_id = PROFILE_IDS[profile_index % len(PROFILE_IDS)]
+            profile_no = PROFILE_NOS[profile_index % len(PROFILE_NOS)]
             profile_index += 1
             
             logging.info("")
             logging.info("="*60)
-            logging.info("Processing article ID %s with profile %s", article_id, profile_id)
+            logging.info("Processing article ID %s with profile No %s", article_id, profile_no)
             logging.info("="*60)
             
             # Открываем профиль Ads Power
-            user_id = open_ads_power_profile(profile_id)
-            if not user_id:
-                logging.error("Failed to open profile %s, skipping article ID %s", profile_id, article_id)
+            result = open_ads_power_profile(profile_no)
+            if not result:
+                logging.error("Failed to open profile No %s, skipping article ID %s", profile_no, article_id)
                 failed_count += 1
                 continue
             
@@ -685,11 +836,11 @@ def main():
             
             try:
                 # Публикуем статью
-                url = post_article_to_medium(article, profile_id)
+                url = post_article_to_medium(article, profile_no)
                 
                 if url:
-                    # Обновляем БД
-                    update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_id)
+                    # Обновляем БД (сохраняем profile_no как profile_id в БД)
+                    update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                     posted_count += 1
                     logging.info("✓ Article ID %s posted successfully!", article_id)
                 else:
@@ -697,8 +848,7 @@ def main():
                     logging.error("✗ Failed to post article ID %s", article_id)
                 
             finally:
-                # Закрываем профиль (опционально, можно оставить открытым)
-                # close_ads_power_profile(profile_id)
+                # Профиль оставляем открытым (не закрываем)
                 pass
             
             # Пауза между статьями (небольшая пауза для стабильности)
