@@ -461,27 +461,32 @@ def ensure_profile_ready(profile_no: int) -> bool:
         logging.error("Missing selenium address or webdriver path for profile %d", profile_no)
         return False
     
-    # Создаём Selenium драйвер
-    try:
-        chrome_options = Options()
-        chrome_options.add_experimental_option("debuggerAddress", selenium_address)
-        
-        service = Service(webdriver_path)
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # Максимизируем окно через Selenium
-        driver.maximize_window()
-        time.sleep(0.5)
-        
-        # Устанавливаем уникальный window_tag через document.title
-        driver.get("about:blank")
-        driver.execute_script(f"document.title = '{profile.window_tag}';")
-        time.sleep(0.5)
-        
-        profile.driver = driver
-        logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
-                    profile_no, profile.profile_id, profile.window_tag)
-        return True
+        # Создаём Selenium драйвер
+        try:
+            chrome_options = Options()
+            chrome_options.add_experimental_option("debuggerAddress", selenium_address)
+            
+            service = Service(webdriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Максимизируем окно через Selenium (если ещё не максимизировано)
+            try:
+                driver.maximize_window()
+                time.sleep(0.5)
+            except Exception as max_err:
+                # Окно уже максимизировано - это нормально, просто пропускаем
+                logging.debug("  Window already maximized (or maximize failed): %s", max_err)
+                time.sleep(0.2)
+            
+            # Устанавливаем уникальный window_tag через document.title
+            driver.get("about:blank")
+            driver.execute_script(f"document.title = '{profile.window_tag}';")
+            time.sleep(0.5)
+            
+            profile.driver = driver
+            logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
+                        profile_no, profile.profile_id, profile.window_tag)
+            return True
         
     except Exception as e:
         logging.error("Error creating Selenium driver for profile %d: %s", profile_no, e)
@@ -681,28 +686,25 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
     if not focus_profile_window(profile_no):
         logging.warning("Failed to focus window for profile %d, but continuing...", profile_no)
     
-    # Открываем URL в активном профиле через PyAutoGUI
-    logging.info("Opening URL in active browser window...")
+    # Открываем URL в активном профиле через Selenium
+    logging.info("Opening Medium URL in active browser window via Selenium...")
     try:
-        # Кликаем по адресной строке для гарантированной активации окна
-        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
-        pyautogui.click(*COORDS_URL_BAR)
-        time.sleep(0.5)
-        # Фокусируем адресную строку браузера
-        pyautogui.hotkey('ctrl', 'l')
-        time.sleep(0.5)
-        # Очищаем адресную строку
-        pyautogui.hotkey('ctrl', 'a')
-        time.sleep(0.2)
-        # Вводим URL
-        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-        time.sleep(0.5)
-        # Нажимаем Enter
-        pyautogui.press('enter')
-        time.sleep(2)  # Даём время на начало загрузки
-        logging.info("✓ URL opened in AdsPower profile browser")
+        profile = profiles[profile_no]
+        if not profile.driver:
+            logging.error("Driver not available for profile %d", profile_no)
+            return None
+        
+        # Открываем новую вкладку с Medium через Selenium
+        profile.driver.execute_script("window.open(arguments[0], '_blank');", MEDIUM_NEW_STORY_URL)
+        time.sleep(1)
+        
+        # Переключаемся на новую вкладку (последняя открытая)
+        profile.driver.switch_to.window(profile.driver.window_handles[-1])
+        time.sleep(2)  # Даём время на загрузку
+        
+        logging.info("✓ URL opened in AdsPower profile browser via Selenium")
     except Exception as e:
-        logging.warning("Failed to open URL in AdsPower browser: %s", e)
+        logging.warning("Failed to open URL in AdsPower browser via Selenium: %s", e)
         return None
     
     return profile_id
@@ -779,41 +781,18 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("Hashtags: %s", hashtags)
         logging.info("")
         
-        # Шаг 1: Открываем Medium new story URL в активном окне AdsPower профиля
+        # Шаг 1: Убеждаемся, что окно профиля активно (URL уже открыт через Selenium в open_ads_power_profile)
         logging.info("="*60)
-        logging.info("STEP 1: Opening Medium new story in active AdsPower browser...")
-        logging.info("  URL: %s", MEDIUM_NEW_STORY_URL)
+        logging.info("STEP 1: Ensuring profile window is active...")
         try:
-            # Убеждаемся, что окно профиля активно
             # Убеждаемся, что окно профиля активно
             profile_no = get_profile_no(profile_id)
             focus_profile_window(profile_no)
-            time.sleep(2)  # Даём больше времени на активацию
+            time.sleep(2)  # Даём время на активацию
             
-            # Кликаем по адресной строке для гарантированной активации окна
-            logging.info("  Clicking on URL bar at %s to ensure window is active", COORDS_URL_BAR)
-            pyautogui.click(*COORDS_URL_BAR)
-            time.sleep(0.5)
-            
-            # Фокусируем адресную строку браузера (Ctrl+L)
-            pyautogui.hotkey('ctrl', 'l')
-            time.sleep(0.5)
-            
-            # Очищаем адресную строку (если там что-то было)
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.2)
-            
-            # Вводим URL
-            pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-            time.sleep(0.5)
-            
-            # Нажимаем Enter для перехода
-            pyautogui.press('enter')
-            time.sleep(1)  # Даём время на начало загрузки
-            
-            logging.info("  ✓ URL opened in AdsPower profile browser")
+            logging.info("  ✓ Profile window is active (Medium URL already opened via Selenium)")
         except Exception as e:
-            logging.error("  ✗ Failed to open URL in AdsPower browser: %s", e)
+            logging.error("  ✗ Failed to ensure window is active: %s", e)
             return None
         
         # Шаг 2: Ждём 10 секунд (рандомизировано)
