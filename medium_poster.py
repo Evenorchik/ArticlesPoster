@@ -699,8 +699,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         original_window = profile.driver.current_window_handle
         logging.debug("  Original window handle: %s", original_window)
         
-        # Закрываем вкладку about:blank, чтобы не было путаницы
-        # Или просто переходим на Medium в текущей вкладке
+        # Переходим на Medium в текущей вкладке
         logging.info("  Navigating to Medium URL in current tab...")
         profile.driver.get(MEDIUM_NEW_STORY_URL)
         time.sleep(2)  # Даём время на загрузку
@@ -708,6 +707,23 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         # Сохраняем handle текущей вкладки (теперь это вкладка с Medium)
         profile.medium_window_handle = profile.driver.current_window_handle
         logging.info("  Medium window handle saved: %s", profile.medium_window_handle)
+        
+        # Явно переключаемся на эту вкладку (на случай, если открылись другие вкладки)
+        profile.driver.switch_to.window(profile.medium_window_handle)
+        logging.info("  Switched to Medium tab")
+        
+        # Активируем окно браузера через PyAutoGUI, чтобы вкладка была видна и активна
+        logging.info("  Activating browser window to make Medium tab visible...")
+        try:
+            # Фокусируем окно профиля
+            focus_profile_window(profile_no)
+            time.sleep(0.5)
+            
+            # Дополнительно: кликаем по вкладке, чтобы она точно была активной
+            # Это можно сделать через клик по координатам вкладки или просто активировать окно
+            logging.info("  Browser window activated, Medium tab should be visible")
+        except Exception as e:
+            logging.warning("  Failed to activate window: %s, but continuing...", e)
         
         # Проверяем, что мы на правильной странице
         current_url = profile.driver.current_url
@@ -721,6 +737,8 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
             current_url = profile.driver.current_url
             logging.info("  Current URL after retry: %s", current_url)
             profile.medium_window_handle = profile.driver.current_window_handle
+            # Снова переключаемся на вкладку
+            profile.driver.switch_to.window(profile.medium_window_handle)
         
         # Ждём 10 секунд для загрузки страницы перед началом PyAutoGUI цикла
         logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
