@@ -59,7 +59,7 @@ PROFILE_IDS = list(PROFILE_MAPPING.keys())
 # Координаты для кликов (из алгоритма пользователя)
 COORDS_TITLE_INPUT = (516, 215)      # Шаг 3: ввод текста (title)
 COORDS_PUBLISH_BUTTON_1 = (1180, 119)  # Шаг 7: первая кнопка Publish
-COORDS_HASHTAGS_INPUT = (914, 438)   # Шаг 8: поле ввода хэштегов
+COORDS_HASHTAGS_INPUT = (941, 392)   # Шаг 8: поле ввода хэштегов
 COORDS_PUBLISH_BUTTON_2 = (933, 595) # Шаг 10: финальная кнопка Publish
 COORDS_URL_BAR = (479, 60)          # Шаг 11: клик на строку браузера
 
@@ -851,14 +851,13 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 10", 10.0)
         logging.info("  ✓ Publication should be complete")
         
-        # Шаг 11: Кликаем на строку браузера
-        logging.info("STEP 11: Clicking on URL bar...")
-        logging.info("  Coordinates: %s", COORDS_URL_BAR)
+        # Шаг 11: Выделяем адресную строку через Ctrl+L
+        logging.info("STEP 11: Selecting URL bar with Ctrl+L...")
         try:
-            pyautogui.click(*COORDS_URL_BAR)
-            logging.info("  ✓ Clicked successfully")
+            pyautogui.hotkey('ctrl', 'l')
+            logging.info("  ✓ URL bar selected successfully")
         except Exception as e:
-            logging.error("  ✗ Failed to click: %s", e)
+            logging.error("  ✗ Failed to select URL bar: %s", e)
             return None
         
         wait_with_log(WAIT_AFTER_URL_BAR_CLICK, "STEP 11", 10.0)
