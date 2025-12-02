@@ -353,12 +353,11 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
 
 def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> bool:
     """
-    Убеждается, что окно браузера профиля активно и развёрнуто.
-    Ждёт появления окна (если его ещё нет) и активирует его.
-    Возвращает True если успешно, False в противном случае.
+    Находит окно браузера профиля и разворачивает его на весь экран.
+    Профиль уже запущен через Ads Power API, нужно просто развернуть окно.
     """
     profile_no = get_profile_no(profile_id)
-    logging.info("Ensuring browser window is active for profile ID: %s (No: %s)", profile_id, profile_no)
+    logging.info("Finding and maximizing browser window for profile ID: %s (No: %s)", profile_id, profile_no)
     
     try:
         import pygetwindow as gw
@@ -369,11 +368,12 @@ def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> boo
         
         while time.time() - start_time < wait_seconds:
             # Ищем окна браузера (Chrome, Edge и т.д.)
+            # ВАЖНО: не проверяем window.visible, чтобы находить и свёрнутые окна
             browser_windows = []
             all_windows = gw.getAllWindows()
             
             for window in all_windows:
-                if not window.visible or not window.title.strip():
+                if not window.title.strip():
                     continue
                     
                 title = window.title.lower()
@@ -382,40 +382,65 @@ def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> boo
                     # Исключаем системные окна и диалоги
                     if 'dialog' not in title and 'popup' not in title:
                         browser_windows.append(window)
+                        logging.debug("  Found potential browser window: %s (visible: %s, size: %dx%d)", 
+                                    window.title, window.visible, window.width, window.height)
             
             if browser_windows:
                 # Сортируем окна по размеру (большие окна обычно и есть профили)
                 browser_windows.sort(key=lambda w: w.width * w.height, reverse=True)
                 browser_window = browser_windows[0]
-                logging.debug("  Found browser window: %s (size: %dx%d)", 
-                            browser_window.title, browser_window.width, browser_window.height)
+                logging.debug("  Found browser window: %s", browser_window.title)
                 break
             
             # Ждём немного перед следующей попыткой
             time.sleep(0.5)
         
         if browser_window:
-            # Активируем и максимизируем окно
             try:
-                browser_window.activate()
-                time.sleep(0.5)  # Даём время на активацию
-                browser_window.maximize()
-                time.sleep(0.3)  # Даём время на максимизацию
-                logging.info("✓ Browser window activated and maximized: %s", browser_window.title)
+                logging.info("  Window found: %s (position: %d,%d, size: %dx%d, visible: %s)", 
+                           browser_window.title, browser_window.left, browser_window.top, 
+                           browser_window.width, browser_window.height, browser_window.visible)
+                
+                # Если окно свёрнуто или очень маленькое, сначала восстанавливаем его
+                if not browser_window.visible or browser_window.width < 100 or browser_window.height < 100:
+                    logging.debug("  Window appears minimized, trying to restore first...")
+                    try:
+                        # Пробуем восстановить через pygetwindow
+                        browser_window.restore()
+                        time.sleep(0.5)
+                        # Обновляем информацию об окне
+                        browser_window = gw.getWindowsWithTitle(browser_window.title)[0] if gw.getWindowsWithTitle(browser_window.title) else browser_window
+                    except Exception as restore_err:
+                        logging.debug("  Restore via pygetwindow failed: %s, will try Alt+Space+R", restore_err)
+                
+                # Активируем окно - кликаем по нему
+                center_x = browser_window.left + max(browser_window.width // 2, 50)
+                center_y = browser_window.top + max(browser_window.height // 2, 50)
+                logging.debug("  Clicking on window at (%d, %d) to activate", center_x, center_y)
+                pyautogui.click(center_x, center_y)
+                time.sleep(0.5)
+                
+                # Разворачиваем через Alt+Space+X
+                logging.debug("  Maximizing window via Alt+Space+X")
+                pyautogui.hotkey('alt', 'space')
+                time.sleep(0.3)
+                pyautogui.press('x')
+                time.sleep(0.5)
+                
+                logging.info("✓ Browser window maximized: %s", browser_window.title)
                 return True
             except Exception as e:
-                logging.warning("  Failed to activate/maximize window: %s", e)
+                logging.warning("  Failed to maximize window: %s", e)
                 return False
         else:
             logging.warning("  No browser windows found after %d seconds", wait_seconds)
             return False
             
     except ImportError:
-        logging.warning("pygetwindow not available, cannot activate window")
-        logging.info("Please install: pip install pygetwindow")
+        logging.warning("pygetwindow not available, cannot find window")
         return False
     except Exception as e:
-        logging.warning("Failed to ensure window is active: %s", e)
+        logging.warning("Failed to find/maximize window: %s", e)
         return False
 
 
