@@ -351,16 +351,16 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
         return None
 
 
-def activate_ads_power_profile(profile_id: str) -> bool:
+def ensure_browser_window_active(profile_id: str) -> bool:
     """
-    Активирует (разворачивает) уже открытый профиль Ads Power.
-    Использует PyAutoGUI для активации окна браузера.
+    Убеждается, что окно браузера профиля активно и развёрнуто.
+    Используется только для максимизации уже открытого окна (профиль открыт через API).
     Возвращает True если успешно, False в противном случае.
     """
     profile_no = get_profile_no(profile_id)
-    logging.info("Activating Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
+    logging.debug("Ensuring browser window is active for profile ID: %s (No: %s)", profile_id, profile_no)
     
-    # Пробуем через PyAutoGUI найти и активировать окно браузера
+    # Пробуем найти и максимизировать окно браузера
     try:
         import pygetwindow as gw
         
@@ -374,60 +374,31 @@ def activate_ads_power_profile(profile_id: str) -> bool:
                 
             title = window.title.lower()
             # Ищем окна браузера, но не системные диалоги
-            # Ads Power профили обычно имеют в заголовке что-то связанное с браузером
             if any(browser in title for browser in ['chrome', 'edge', 'brave', 'opera', 'chromium']):
                 # Исключаем системные окна и диалоги
                 if 'dialog' not in title and 'popup' not in title:
                     browser_windows.append(window)
-                    logging.debug("  Found browser window: %s", window.title)
         
         if browser_windows:
             # Сортируем окна по размеру (большие окна обычно и есть профили)
             browser_windows.sort(key=lambda w: w.width * w.height, reverse=True)
             
-            # Активируем самое большое окно браузера (обычно это окно Ads Power профиля)
+            # Максимизируем самое большое окно браузера
             window = browser_windows[0]
-            logging.debug("  Activating window: %s (size: %dx%d)", window.title, window.width, window.height)
-            window.activate()
-            time.sleep(0.5)  # Даём время на активацию
             window.maximize()
-            time.sleep(0.5)  # Даём время на максимизацию
-            logging.info("✓ Profile window activated via PyAutoGUI: %s", window.title)
+            time.sleep(0.3)  # Даём время на максимизацию
+            logging.debug("✓ Browser window maximized: %s", window.title)
             return True
         else:
-            logging.warning("No browser windows found to activate")
-            # Пробуем альтернативный способ - использовать Alt+Tab для переключения
-            try:
-                # Alt+Tab переключает на предыдущее активное окно (обычно это браузер)
-                pyautogui.hotkey('alt', 'tab')
-                time.sleep(0.5)
-                logging.info("✓ Switched to previous window (Alt+Tab)")
-                return True
-            except Exception as e:
-                logging.debug("  Alt+Tab failed: %s", e)
-                return False
+            logging.debug("No browser windows found (window may not be open yet)")
+            return False
             
     except ImportError:
-        logging.warning("pygetwindow not available, trying alternative method")
-        # Альтернативный способ без pygetwindow
-        try:
-            pyautogui.hotkey('alt', 'tab')
-            time.sleep(0.3)
-            logging.info("✓ Switched to active window (alternative method)")
-            return True
-        except Exception as e:
-            logging.warning("Failed to activate window: %s", e)
-            return False
+        logging.debug("pygetwindow not available, skipping window maximization")
+        return False
     except Exception as e:
-        logging.warning("Failed to activate window via PyAutoGUI: %s", e)
-        # Пробуем альтернативный способ
-        try:
-            pyautogui.hotkey('alt', 'tab')
-            time.sleep(0.3)
-            logging.info("✓ Switched to active window (fallback)")
-            return True
-        except:
-            return False
+        logging.debug("Failed to maximize window: %s", e)
+        return False
 
 
 def open_ads_power_profile(profile_id: str) -> Optional[str]:
@@ -452,7 +423,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
         if status == "Active":
             # Профиль уже открыт - активируем окно
             logging.info("Profile ID %s (No: %s) is already active, activating window...", profile_id, profile_no)
-            if activate_ads_power_profile(profile_id):
+            if ensure_browser_window_active(profile_id):
                 # Открываем URL в уже открытом профиле через PyAutoGUI
                 logging.info("✓ Profile ID %s (No: %s) activated, opening URL in browser...", profile_id, profile_no)
                 try:
@@ -530,7 +501,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[str]:
                 # Открываем URL в открытом профиле через PyAutoGUI
                 try:
                     # Активируем окно профиля
-                    activate_ads_power_profile(profile_id)
+                    ensure_browser_window_active(profile_id)
                     time.sleep(1)
                     # Фокусируем адресную строку браузера
                     pyautogui.hotkey('ctrl', 'l')
