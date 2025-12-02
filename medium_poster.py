@@ -10,8 +10,19 @@ import requests
 import pyautogui
 import pyperclip
 import webbrowser
-from typing import Optional, List
+from typing import Optional, List, Dict
 from contextlib import closing
+from dataclasses import dataclass, field
+
+# Selenium
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    logging.warning("Selenium not available. Install with: pip install selenium")
 
 # PostgreSQL
 try:
@@ -60,7 +71,7 @@ PROFILE_IDS = list(PROFILE_MAPPING.keys())
 COORDS_TITLE_INPUT = (516, 215)      # Шаг 3: ввод текста (title)
 COORDS_PUBLISH_BUTTON_1 = (1180, 119)  # Шаг 7: первая кнопка Publish
 COORDS_HASHTAGS_INPUT = (941, 392)   # Шаг 8: поле ввода хэштегов
-COORDS_PUBLISH_BUTTON_2 = (933, 595) # Шаг 10: финальная кнопка Publish
+COORDS_PUBLISH_BUTTON_2 = (925, 553) # Шаг 10: финальная кнопка Publish
 COORDS_URL_BAR = (479, 60)          # Шаг 11: клик на строку браузера
 
 # Задержки (базовые значения, будут рандомизированы)
@@ -79,6 +90,21 @@ WAIT_AFTER_COPY = 1  # Шаг 12: ждём 1 секунду после Ctrl+C
 # Настройка PyAutoGUI
 pyautogui.PAUSE = 0.1  # минимальная пауза между действиями PyAutoGUI
 pyautogui.FAILSAFE = True  # перемещение мыши в угол экрана для остановки
+
+# Глобальный словарь профилей
+@dataclass
+class Profile:
+    """Структура для хранения информации о профиле Ads Power"""
+    profile_no: int
+    profile_id: str
+    driver: Optional[object] = None  # Selenium WebDriver
+    window_tag: str = field(init=False)
+    
+    def __post_init__(self):
+        self.window_tag = f"ADS_PROFILE_{self.profile_no}"
+
+# Глобальный словарь профилей: {profile_no: Profile}
+profiles: Dict[int, Profile] = {}
 
 
 def random_delay(base_seconds: float, variance_percent: float = 10.0) -> float:
@@ -298,6 +324,13 @@ def get_profile_no(profile_id: str) -> int:
     """Возвращает profile_no для profile_id (для логов)."""
     return PROFILE_MAPPING.get(profile_id, 0)
 
+def get_profile_id(profile_no: int) -> Optional[str]:
+    """Получает profile_id из profile_no используя обратный маппинг."""
+    for pid, pno in PROFILE_MAPPING.items():
+        if pno == profile_no:
+            return pid
+    return None
+
 
 def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
     """
@@ -349,6 +382,192 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
     except Exception as e:
         logging.error("✗ Unexpected error checking profile status: %s", e)
         return None
+
+
+def ensure_profile_ready(profile_no: int) -> bool:
+    """
+    Гарантированно получает живой Selenium-драйвер и помечает окно уникальным window_tag.
+    Использует API v2 для проверки статуса и запуска профиля.
+    """
+    if not SELENIUM_AVAILABLE:
+        logging.error("Selenium not available! Install with: pip install selenium")
+        return False
+    
+    # Получаем или создаём профиль
+    if profile_no not in profiles:
+        profile_id = get_profile_id(profile_no)
+        if not profile_id:
+            logging.error("Profile No %d not found in PROFILE_MAPPING", profile_no)
+            return False
+        profiles[profile_no] = Profile(profile_no=profile_no, profile_id=profile_id)
+    
+    profile = profiles[profile_no]
+    
+    # Если драйвер уже есть и работает - проверяем его
+    if profile.driver:
+        try:
+            # Проверяем, что драйвер ещё жив
+            profile.driver.current_url
+            logging.debug("Profile %d already has active driver", profile_no)
+            return True
+        except:
+            # Драйвер мёртв, нужно пересоздать
+            logging.debug("Profile %d driver is dead, recreating...", profile_no)
+            profile.driver = None
+    
+    # Проверяем статус профиля через API
+    profile_status = check_ads_power_profile_status(profile.profile_id)
+    
+    if not profile_status:
+        # Профиль не активен - запускаем его
+        logging.info("Profile %d (ID: %s) is not active, starting...", profile_no, profile.profile_id)
+        
+        endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
+        headers = {"Content-Type": "application/json"}
+        if ADS_POWER_API_KEY:
+            headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        
+        payload = {"profile_id": profile.profile_id}
+        
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            if response.status_code != 200:
+                logging.error("Failed to start profile %d: HTTP %d", profile_no, response.status_code)
+                return False
+            
+            data = response.json()
+            if data.get("code") != 0:
+                logging.error("Failed to start profile %d: %s", profile_no, data.get("msg", "Unknown error"))
+                return False
+            
+            # Ждём немного, чтобы браузер успел запуститься
+            time.sleep(3)
+            
+            # Повторно проверяем статус
+            profile_status = check_ads_power_profile_status(profile.profile_id)
+            if not profile_status:
+                logging.error("Profile %d still not active after start", profile_no)
+                return False
+        except Exception as e:
+            logging.error("Error starting profile %d: %s", profile_no, e)
+            return False
+    
+    # Получаем данные для подключения Selenium
+    ws_data = profile_status.get("ws", {})
+    selenium_address = ws_data.get("selenium", "")
+    webdriver_path = profile_status.get("webdriver", "")
+    
+    if not selenium_address or not webdriver_path:
+        logging.error("Missing selenium address or webdriver path for profile %d", profile_no)
+        return False
+    
+    # Создаём Selenium драйвер
+    try:
+        chrome_options = Options()
+        chrome_options.add_experimental_option("debuggerAddress", selenium_address)
+        
+        service = Service(webdriver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Максимизируем окно через Selenium
+        driver.maximize_window()
+        time.sleep(0.5)
+        
+        # Устанавливаем уникальный window_tag через document.title
+        driver.get("about:blank")
+        driver.execute_script(f"document.title = '{profile.window_tag}';")
+        time.sleep(0.5)
+        
+        profile.driver = driver
+        logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
+                    profile_no, profile.profile_id, profile.window_tag)
+        return True
+        
+    except Exception as e:
+        logging.error("Error creating Selenium driver for profile %d: %s", profile_no, e)
+        return False
+
+
+def focus_profile_window(profile_no: int) -> bool:
+    """
+    Гарантированно поднимает нужное окно на весь экран и делает активным.
+    Ищет окно по window_tag.
+    """
+    if profile_no not in profiles:
+        logging.error("Profile %d not found in profiles dict", profile_no)
+        return False
+    
+    profile = profiles[profile_no]
+    
+    try:
+        import pygetwindow as gw
+        
+        # Ищем окно по window_tag
+        windows = gw.getWindowsWithTitle(profile.window_tag)
+        if not windows:
+            # Пробуем найти по частичному совпадению (на случай, если добавился суффикс браузера)
+            all_windows = gw.getAllWindows()
+            for win in all_windows:
+                if profile.window_tag in win.title:
+                    windows = [win]
+                    break
+        
+        if not windows:
+            logging.warning("Window with tag '%s' not found for profile %d", profile.window_tag, profile_no)
+            return False
+        
+        win = windows[0]
+        
+        # Разворачиваем и активируем
+        if win.isMinimized:
+            win.restore()
+            time.sleep(0.3)
+        
+        win.activate()
+        time.sleep(0.3)
+        win.maximize()
+        time.sleep(0.5)
+        
+        logging.info("✓ Profile %d window focused and maximized: %s", profile_no, win.title)
+        return True
+        
+    except ImportError:
+        logging.error("pygetwindow not available")
+        return False
+    except Exception as e:
+        logging.error("Error focusing window for profile %d: %s", profile_no, e)
+        return False
+
+
+def minimize_profile_window(profile_no: int) -> bool:
+    """
+    Сворачивает окно профиля. Браузер остаётся Active в AdsPower.
+    """
+    if profile_no not in profiles:
+        return False
+    
+    profile = profiles[profile_no]
+    
+    try:
+        import pygetwindow as gw
+        
+        windows = gw.getWindowsWithTitle(profile.window_tag)
+        if not windows:
+            # Пробуем найти по частичному совпадению
+            all_windows = gw.getAllWindows()
+            for win in all_windows:
+                if profile.window_tag in win.title:
+                    windows = [win]
+                    break
+        
+        if windows:
+            windows[0].minimize()
+            logging.debug("Profile %d window minimized", profile_no)
+            return True
+        
+        return False
+    except:
+        return False
 
 
 def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> bool:
@@ -446,183 +665,47 @@ def ensure_browser_window_active(profile_id: str, wait_seconds: int = 10) -> boo
 
 def open_ads_power_profile(profile_id: str) -> Optional[str]:
     """
-    Открывает или активирует профиль Ads Power через API v2.
-    Использует profile_id для обращения к API.
-    Сначала проверяет статус профиля через GET /api/v2/browser-profile/active.
-    Если профиль активен - активирует окно и открывает URL.
-    Если не активен - открывает профиль через POST /api/v2/browser-profile/start.
+    Открывает или активирует профиль Ads Power через новую логику с Selenium и window_tag.
+    Использует ensure_profile_ready и focus_profile_window.
     Возвращает profile_id или None в случае ошибки.
     """
     profile_no = get_profile_no(profile_id)
     logging.info("Opening/activating Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
     
-    # Шаг 1: Проверяем статус профиля
-    profile_status = check_ads_power_profile_status(profile_id)
+    # Подготавливаем профиль (запускаем через API, создаём Selenium драйвер, устанавливаем window_tag)
+    if not ensure_profile_ready(profile_no):
+        logging.error("Failed to ensure profile %d is ready", profile_no)
+        return None
     
-    if profile_status:
-        status = profile_status.get("status", "Unknown")
-        logging.info("Profile ID %s (No: %s) status: %s", profile_id, profile_no, status)
-        
-        if status == "Active":
-            # Профиль уже открыт - активируем окно
-            logging.info("Profile ID %s (No: %s) is already active, activating window...", profile_id, profile_no)
-            if ensure_browser_window_active(profile_id):
-                # Открываем URL в уже открытом профиле через PyAutoGUI
-                logging.info("✓ Profile ID %s (No: %s) activated, opening URL in browser...", profile_id, profile_no)
-                try:
-                    # Кликаем по адресной строке для гарантированной активации окна
-                    logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
-                    pyautogui.click(*COORDS_URL_BAR)
-                    time.sleep(0.5)
-                    # Фокусируем адресную строку браузера
-                    pyautogui.hotkey('ctrl', 'l')
-                    time.sleep(0.5)
-                    # Очищаем адресную строку
-                    pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.2)
-                    # Вводим URL
-                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-                    time.sleep(0.5)
-                    # Нажимаем Enter
-                    pyautogui.press('enter')
-                    time.sleep(2)  # Даём время на начало загрузки
-                    logging.info("✓ URL opened in AdsPower profile browser")
-                except Exception as e:
-                    logging.warning("Failed to open URL in AdsPower browser: %s", e)
-                
-                return profile_id
-            else:
-                logging.warning("Failed to activate window, but profile is active - trying to open URL anyway")
-                # Пробуем открыть URL даже если активация не удалась
-                try:
-                    # Кликаем по адресной строке для гарантированной активации окна
-                    logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
-                    pyautogui.click(*COORDS_URL_BAR)
-                    time.sleep(0.5)
-                    pyautogui.hotkey('ctrl', 'l')
-                    time.sleep(0.5)
-                    pyautogui.hotkey('ctrl', 'a')
-                    time.sleep(0.2)
-                    pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-                    time.sleep(0.5)
-                    pyautogui.press('enter')
-                    time.sleep(2)
-                except Exception as e:
-                    logging.warning("Failed to open URL: %s", e)
-                return profile_id
+    # Фокусируем окно профиля (разворачиваем и активируем)
+    if not focus_profile_window(profile_no):
+        logging.warning("Failed to focus window for profile %d, but continuing...", profile_no)
     
-    # Шаг 2: Профиль не активен - открываем его через API v2
-    logging.info("Profile ID %s (No: %s) is not active, opening new instance...", profile_id, profile_no)
-    
-    # Используем правильный endpoint для API v2
-    endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
-    
-    # Формируем заголовки
-    headers = {
-        "Content-Type": "application/json"
-    }
-    
-    # Добавляем API key, если он указан
-    if ADS_POWER_API_KEY:
-        headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
-        logging.debug("  Using API key for authentication")
-    
-    # Формируем payload с profile_id
-    payload = {
-        "profile_id": profile_id
-    }
-    
+    # Открываем URL в активном профиле через PyAutoGUI
+    logging.info("Opening URL in active browser window...")
     try:
-        logging.debug("  POST request to: %s", endpoint)
-        logging.debug("  Headers: %s", {k: v if k != "Authorization" else "Bearer ***" for k, v in headers.items()})
-        logging.debug("  Payload: %s", payload)
-        
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
-        logging.debug("  Response status code: %s", response.status_code)
-        
-        if response.status_code == 200:
-            data = response.json()
-            logging.debug("  Response data: %s", data)
-            
-            if data.get("code") == 0:
-                logging.info("✓ Profile ID %s (No: %s) opened successfully", profile_id, profile_no)
-                
-                # Ждём появления и активируем окно браузера (максимум 15 секунд)
-                logging.info("Waiting for browser window to appear and activating it...")
-                if ensure_browser_window_active(profile_id, wait_seconds=15):
-                    time.sleep(2)  # Дополнительная пауза после активации
-                    
-                    # Открываем URL в открытом профиле через PyAutoGUI
-                    try:
-                        logging.info("Opening URL in active browser window...")
-                        # Кликаем по адресной строке для гарантированной активации окна
-                        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
-                        pyautogui.click(*COORDS_URL_BAR)
-                        time.sleep(0.5)
-                        # Фокусируем адресную строку браузера
-                        pyautogui.hotkey('ctrl', 'l')
-                        time.sleep(0.5)
-                        # Очищаем адресную строку
-                        pyautogui.hotkey('ctrl', 'a')
-                        time.sleep(0.2)
-                        # Вводим URL
-                        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-                        time.sleep(0.5)
-                        # Нажимаем Enter
-                        pyautogui.press('enter')
-                        time.sleep(2)  # Даём время на начало загрузки
-                        logging.info("✓ URL opened in AdsPower profile browser")
-                    except Exception as e:
-                        logging.warning("Failed to open URL in AdsPower browser: %s", e)
-                else:
-                    logging.warning("Failed to activate browser window, but trying to open URL anyway...")
-                    # Пробуем открыть URL даже если активация не удалась
-                    try:
-                        # Кликаем по адресной строке для гарантированной активации окна
-                        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
-                        pyautogui.click(*COORDS_URL_BAR)
-                        time.sleep(0.5)
-                        pyautogui.hotkey('ctrl', 'l')
-                        time.sleep(0.5)
-                        pyautogui.hotkey('ctrl', 'a')
-                        time.sleep(0.2)
-                        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
-                        time.sleep(0.5)
-                        pyautogui.press('enter')
-                        time.sleep(2)
-                        logging.info("✓ URL opened (window activation may have failed)")
-                    except Exception as e:
-                        logging.warning("Failed to open URL: %s", e)
-                
-                return profile_id
-            else:
-                error_msg = data.get("msg", data.get("message", "Unknown error"))
-                error_code = data.get("code", "N/A")
-                logging.error("✗ Ads Power API error (code: %s): %s", error_code, error_msg)
-                return None
-        else:
-            logging.error("✗ HTTP error: %s", response.status_code)
-            try:
-                error_data = response.json()
-                logging.error("  Error response: %s", error_data)
-            except:
-                logging.error("  Error response (text): %s", response.text)
-            return None
-            
-    except requests.exceptions.Timeout:
-        logging.error("✗ Timeout while opening profile (request took >30s)")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logging.error("✗ Connection error: %s", e)
-        logging.error("  Make sure Ads Power is running and Local API is enabled")
-        logging.error("  Check API URL: %s", ADS_POWER_API_URL)
-        return None
-    except requests.exceptions.RequestException as e:
-        logging.error("✗ Request error: %s", e)
-        return None
+        # Кликаем по адресной строке для гарантированной активации окна
+        logging.debug("  Clicking on URL bar at %s", COORDS_URL_BAR)
+        pyautogui.click(*COORDS_URL_BAR)
+        time.sleep(0.5)
+        # Фокусируем адресную строку браузера
+        pyautogui.hotkey('ctrl', 'l')
+        time.sleep(0.5)
+        # Очищаем адресную строку
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.2)
+        # Вводим URL
+        pyautogui.typewrite(MEDIUM_NEW_STORY_URL, interval=0.02)
+        time.sleep(0.5)
+        # Нажимаем Enter
+        pyautogui.press('enter')
+        time.sleep(2)  # Даём время на начало загрузки
+        logging.info("✓ URL opened in AdsPower profile browser")
     except Exception as e:
-        logging.error("✗ Unexpected error: %s", e, exc_info=True)
+        logging.warning("Failed to open URL in AdsPower browser: %s", e)
         return None
+    
+    return profile_id
 
 
 def close_ads_power_profile(profile_id: int) -> bool:
@@ -702,7 +785,9 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  URL: %s", MEDIUM_NEW_STORY_URL)
         try:
             # Убеждаемся, что окно профиля активно
-            ensure_browser_window_active(profile_id)
+            # Убеждаемся, что окно профиля активно
+            profile_no = get_profile_no(profile_id)
+            focus_profile_window(profile_no)
             time.sleep(2)  # Даём больше времени на активацию
             
             # Кликаем по адресной строке для гарантированной активации окна
@@ -1022,6 +1107,9 @@ def main():
                 else:
                     failed_count += 1
                     logging.error("✗ Failed to post article ID %s", article_id)
+                
+                # Сворачиваем окно профиля после работы
+                minimize_profile_window(profile_no)
                 
             finally:
                 # Профиль оставляем открытым (не закрываем)
