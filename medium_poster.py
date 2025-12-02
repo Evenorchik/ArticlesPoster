@@ -502,28 +502,35 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
             
-            # Устанавливаем HTML формат (CF_HTML) - передаем bytes напрямую
-            win32clipboard.SetClipboardData(win32con.CF_HTML, cf_html_bytes)
+            # Регистрируем формат "HTML Format" (это правильный способ для HTML в Windows)
+            html_format = win32clipboard.RegisterClipboardFormat("HTML Format")
             
-            # Также устанавливаем plain text для совместимости
-            win32clipboard.SetClipboardData(win32con.CF_TEXT, plain_text.encode('utf-8'))
+            # Устанавливаем HTML формат - передаем bytes напрямую
+            win32clipboard.SetClipboardData(html_format, cf_html_bytes)
+            
+            # Также устанавливаем plain text для совместимости (используем CF_UNICODETEXT, а не CF_TEXT)
+            # CF_UNICODETEXT принимает Unicode-строку, а не bytes
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, plain_text)
             
             # Закрываем буфер обмена
             win32clipboard.CloseClipboard()
             
-            logging.debug("Markdown copied to clipboard as Rich Text (HTML format, CF_HTML)")
+            logging.debug("Markdown copied to clipboard as Rich Text (HTML Format)")
             logging.debug("  CF_HTML size: %d bytes", len(cf_html_bytes))
+            logging.debug("  HTML Format registered: %d", html_format)
             return True
         except ImportError:
             # Fallback: используем pyperclip (может не поддерживать HTML напрямую)
             logging.warning("win32clipboard not available, using pyperclip fallback (may not preserve formatting)")
-            pyperclip.copy(html_fragment)
-            return True
+            # В fallback копируем plain text, а не HTML, чтобы не вставлять теги как текст
+            pyperclip.copy(plain_text)
+            return False
         except Exception as e:
-            logging.error("Error copying to clipboard: %s", e)
-            # Fallback: используем pyperclip
-            pyperclip.copy(html_fragment)
-            return True
+            logging.error("Error copying to clipboard: %s", e, exc_info=True)
+            # В fallback копируем plain text, а не HTML, чтобы не вставлять теги как текст
+            logging.warning("Falling back to plain text (HTML formatting will be lost)")
+            pyperclip.copy(plain_text)
+            return False
             
     except Exception as e:
         logging.error("Error in copy_markdown_as_rich_text: %s", e)
