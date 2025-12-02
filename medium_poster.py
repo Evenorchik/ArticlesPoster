@@ -2,7 +2,6 @@
 Скрипт для автоматического постинга статей на Medium через PyAutoGUI и Ads Power.
 Читает статьи из PostgreSQL (таблица refined_articles_*) и публикует их на Medium.
 """
-import os
 import time
 import logging
 import random
@@ -11,7 +10,6 @@ import pyautogui
 import pyperclip
 import re
 from typing import Optional, List, Dict
-from contextlib import closing
 from dataclasses import dataclass, field
 
 # Markdown
@@ -86,9 +84,6 @@ PROFILE_SEQUENTIAL_MAPPING = {
     125: 9,
     126: 10,
 }
-
-# Обратный маппинг sequential_no -> profile_no
-SEQUENTIAL_TO_PROFILE_NO = {v: k for k, v in PROFILE_SEQUENTIAL_MAPPING.items()}
 
 # ID профилей Ads Power (циклический перебор) - используем profile_id для API
 PROFILE_IDS = list(PROFILE_MAPPING.keys())
@@ -351,13 +346,6 @@ def get_profile_no(profile_id: str) -> int:
     """Возвращает profile_no для profile_id (для логов)."""
     return PROFILE_MAPPING.get(profile_id, 0)
 
-def format_profile_info(profile_id: str, profile_no: int) -> str:
-    """Форматирует информацию о профиле для логов: ID (No: X, Seq: Y)."""
-    sequential_no = get_sequential_no(profile_no)
-    if sequential_no:
-        return f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
-    return f"{profile_id} (No: {profile_no})"
-
 def get_profile_id(profile_no: int) -> Optional[str]:
     """Получает profile_id из profile_no используя обратный маппинг."""
     for pid, pno in PROFILE_MAPPING.items():
@@ -368,10 +356,6 @@ def get_profile_id(profile_no: int) -> Optional[str]:
 def get_sequential_no(profile_no: int) -> Optional[int]:
     """Получает последовательный номер профиля (1-10) из profile_no."""
     return PROFILE_SEQUENTIAL_MAPPING.get(profile_no)
-
-def get_profile_no_from_sequential(sequential_no: int) -> Optional[int]:
-    """Получает profile_no из последовательного номера (1-10)."""
-    return SEQUENTIAL_TO_PROFILE_NO.get(sequential_no)
 
 
 def markdown_to_html(markdown_text: str) -> str:
@@ -878,10 +862,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     """
     article_id = article.get('id') if isinstance(article, dict) else article[0]
     profile_no = get_profile_no(profile_id)
+    sequential_no = get_sequential_no(profile_no)
+    profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
     logging.info("="*60)
-        sequential_no = get_sequential_no(profile_no)
-        profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
-        logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
+    logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
     logging.info("="*60)
     
     try:
