@@ -423,67 +423,58 @@ def html_to_plain_text(html: str) -> str:
 
 def prepare_cf_html(html_fragment: str) -> bytes:
     """
-    Подготавливает HTML для формата CF_HTML (Windows clipboard format).
-    CF_HTML имеет специальную структуру с заголовком и позицией фрагмента.
-    Возвращает bytes для правильной работы с win32clipboard.
-    Позиции должны вычисляться в байтах UTF-8.
+    Подготавливает HTML для формата CF_HTML (Windows clipboard format),
+    корректно вычисляя позиции в байтах UTF-8.
     """
-    # Базовый HTML с DOCTYPE и т.д.
-    html_start = """<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
-<HTML><HEAD><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></HEAD><BODY>"""
-    
-    # Маркер начала фрагмента
-    fragment_start_marker = "<!--StartFragment-->"
-    # Маркер конца фрагмента
-    fragment_end_marker = "<!--EndFragment-->"
-    
-    html_end = "</BODY></HTML>"
-    
-    # Собираем полный HTML (без заголовка пока)
-    full_html = html_start + fragment_start_marker + html_fragment + fragment_end_marker + html_end
-    
-    # Кодируем в UTF-8 для правильного вычисления позиций в байтах
-    html_start_bytes = html_start.encode('utf-8')
-    fragment_start_marker_bytes = fragment_start_marker.encode('utf-8')
-    html_fragment_bytes = html_fragment.encode('utf-8')
-    fragment_end_marker_bytes = fragment_end_marker.encode('utf-8')
-    html_end_bytes = html_end.encode('utf-8')
-    full_html_bytes = full_html.encode('utf-8')
-    
-    # Вычисляем позиции в байтах относительно начала полного HTML
-    start_html_pos = len(html_start_bytes)
-    start_fragment_pos = start_html_pos + len(fragment_start_marker_bytes)
-    end_fragment_pos = start_fragment_pos + len(html_fragment_bytes)
-    end_html_pos = len(full_html_bytes)
-    
-    # Формируем заголовок CF_HTML (временно, для вычисления его длины)
-    temp_header = f"""Version:0.9
-StartHTML:{start_html_pos:09d}
-EndHTML:{end_html_pos:09d}
-StartFragment:{start_fragment_pos:09d}
-EndFragment:{end_fragment_pos:09d}
-"""
-    
-    # Вычисляем реальные позиции с учётом заголовка (в байтах UTF-8)
-    header_bytes = temp_header.encode('utf-8')
-    header_len = len(header_bytes)
-    
-    # Финальные позиции: позиция в заголовке + позиция в HTML
-    start_html_pos_final = header_len
-    end_html_pos_final = header_len + len(full_html_bytes)
-    start_fragment_pos_final = header_len + start_fragment_pos
-    end_fragment_pos_final = header_len + end_fragment_pos
-    
-    # Формируем финальный CF_HTML с правильными позициями
-    cf_html_str = f"""Version:0.9
-StartHTML:{start_html_pos_final:09d}
-EndHTML:{end_html_pos_final:09d}
-StartFragment:{start_fragment_pos_final:09d}
-EndFragment:{end_fragment_pos_final:09d}
-{full_html}"""
-    
-    # Возвращаем как bytes
-    return cf_html_str.encode('utf-8')
+    html_prefix = """<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head><body>"""
+    start_marker = "<!--StartFragment-->"
+    end_marker = "<!--EndFragment-->"
+    html_suffix = "</body></html>"
+
+    full_html = f"{html_prefix}{start_marker}{html_fragment}{end_marker}{html_suffix}"
+    full_html_bytes = full_html.encode("utf-8")
+
+    start_marker_bytes = start_marker.encode("utf-8")
+    end_marker_bytes = end_marker.encode("utf-8")
+
+    start_idx = full_html_bytes.find(start_marker_bytes)
+    if start_idx == -1:
+        raise ValueError("StartFragment marker not found in HTML fragment")
+    fragment_start = start_idx + len(start_marker_bytes)
+
+    end_idx = full_html_bytes.find(end_marker_bytes)
+    if end_idx == -1:
+        raise ValueError("EndFragment marker not found in HTML fragment")
+    fragment_end = end_idx
+
+    header_template = (
+        "Version:0.9\r\n"
+        "StartHTML:{start_html:010d}\r\n"
+        "EndHTML:{end_html:010d}\r\n"
+        "StartFragment:{start_fragment:010d}\r\n"
+        "EndFragment:{end_fragment:010d}\r\n"
+    )
+
+    placeholder_header = header_template.format(
+        start_html=0, end_html=0, start_fragment=0, end_fragment=0
+    )
+    header_len = len(placeholder_header)
+
+    start_html = header_len
+    end_html = start_html + len(full_html_bytes)
+    start_fragment = start_html + fragment_start
+    end_fragment = start_html + fragment_end
+
+    header = header_template.format(
+        start_html=start_html,
+        end_html=end_html,
+        start_fragment=start_fragment,
+        end_fragment=end_fragment,
+    )
+
+    cf_html_bytes = header.encode("utf-8") + full_html_bytes
+    return cf_html_bytes
 
 
 def copy_markdown_as_rich_text(markdown_text: str) -> bool:
