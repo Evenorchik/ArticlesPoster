@@ -38,8 +38,23 @@ MEDIUM_NEW_STORY_URL = "https://medium.com/new-story"
 ADS_POWER_API_URL = "http://local.adspower.net:50325"
 ADS_POWER_API_KEY = "856007acdf241361915ed26a00a6d70b"
 
-# Номера профилей Ads Power (циклический перебор) - это profile_no, не profile_id
-PROFILE_NOS = [74, 80, 70, 126, 125, 89, 90, 91, 92, 93]
+# Маппинг profile_id -> profile_no для удобства в логах
+# Формат: {profile_id: profile_no}
+PROFILE_MAPPING = {
+    "kqnfhbe": 70,
+    "kqnfhbi": 74,
+    "kqnfhbo": 80,
+    "kqnfhbx": 89,
+    "kqnfhby": 90,
+    "kqnfhc0": 91,
+    "kqnfhc1": 92,
+    "kqnfhc2": 93,
+    "k107wk78": 125,
+    "k107wyp0": 126,
+}
+
+# ID профилей Ads Power (циклический перебор) - используем profile_id для API
+PROFILE_IDS = list(PROFILE_MAPPING.keys())
 
 # Координаты для кликов (из алгоритма пользователя)
 COORDS_TITLE_INPUT = (516, 215)      # Шаг 3: ввод текста (title)
@@ -279,19 +294,25 @@ def update_article_url_and_profile(pg_conn, table_name: str, article_id: int, ur
         raise
 
 
-def check_ads_power_profile_status(profile_no: int) -> Optional[dict]:
+def get_profile_no(profile_id: str) -> int:
+    """Возвращает profile_no для profile_id (для логов)."""
+    return PROFILE_MAPPING.get(profile_id, 0)
+
+
+def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
     """
     Проверяет статус профиля Ads Power через API v2.
-    Использует profile_no (номер профиля), не profile_id.
+    Использует profile_id для обращения к API.
     Возвращает информацию о профиле или None в случае ошибки.
     """
-    logging.debug("Checking status of Ads Power profile No: %s", profile_no)
+    profile_no = get_profile_no(profile_id)
+    logging.debug("Checking status of Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
     
     endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/active"
     
-    # Используем GET запрос с параметром profile_no
+    # Используем GET запрос с параметром profile_id
     params = {
-        "profile_no": str(profile_no)
+        "profile_id": profile_id
     }
     
     # Формируем заголовки (добавляем API key, если указан)
@@ -312,7 +333,7 @@ def check_ads_power_profile_status(profile_no: int) -> Optional[dict]:
             if data.get("code") == 0:
                 profile_data = data.get("data", {})
                 status = profile_data.get("status", "Unknown")
-                logging.info("Profile No %s status: %s", profile_no, status)
+                logging.info("Profile ID %s (No: %s) status: %s", profile_id, profile_no, status)
                 return profile_data
             else:
                 error_msg = data.get("msg", "Unknown error")
@@ -330,13 +351,14 @@ def check_ads_power_profile_status(profile_no: int) -> Optional[dict]:
         return None
 
 
-def activate_ads_power_profile(profile_no: int) -> bool:
+def activate_ads_power_profile(profile_id: str) -> bool:
     """
     Активирует (разворачивает) уже открытый профиль Ads Power.
     Использует PyAutoGUI для активации окна браузера.
     Возвращает True если успешно, False в противном случае.
     """
-    logging.info("Activating Ads Power profile No: %s", profile_no)
+    profile_no = get_profile_no(profile_id)
+    logging.info("Activating Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
     
     # Пробуем через PyAutoGUI найти и активировать окно браузера
     try:
@@ -370,43 +392,44 @@ def activate_ads_power_profile(profile_no: int) -> bool:
         return False
 
 
-def open_ads_power_profile(profile_no: int) -> Optional[str]:
+def open_ads_power_profile(profile_id: str) -> Optional[str]:
     """
     Открывает или активирует профиль Ads Power через API v2.
-    Использует profile_no (номер профиля), не profile_id.
+    Использует profile_id для обращения к API.
     Сначала проверяет статус профиля через GET /api/v2/browser-profile/active.
     Если профиль активен - активирует окно и открывает URL.
     Если не активен - открывает профиль через POST /api/v2/browser-profile/start.
-    Возвращает profile_no или None в случае ошибки.
+    Возвращает profile_id или None в случае ошибки.
     """
-    logging.info("Opening/activating Ads Power profile No: %s", profile_no)
+    profile_no = get_profile_no(profile_id)
+    logging.info("Opening/activating Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
     
     # Шаг 1: Проверяем статус профиля
-    profile_status = check_ads_power_profile_status(profile_no)
+    profile_status = check_ads_power_profile_status(profile_id)
     
     if profile_status:
         status = profile_status.get("status", "Unknown")
-        logging.info("Profile No %s status: %s", profile_no, status)
+        logging.info("Profile ID %s (No: %s) status: %s", profile_id, profile_no, status)
         
         if status == "Active":
             # Профиль уже открыт - активируем окно
-            logging.info("Profile No %s is already active, activating window...", profile_no)
-            if activate_ads_power_profile(profile_no):
+            logging.info("Profile ID %s (No: %s) is already active, activating window...", profile_id, profile_no)
+            if activate_ads_power_profile(profile_id):
                 # Открываем URL в уже открытом профиле через webbrowser
-                logging.info("✓ Profile No %s activated, opening URL...", profile_no)
+                logging.info("✓ Profile ID %s (No: %s) activated, opening URL...", profile_id, profile_no)
                 try:
                     webbrowser.open(MEDIUM_NEW_STORY_URL)
                     time.sleep(2)  # Даём время на открытие URL
                 except Exception as e:
                     logging.warning("Failed to open URL via webbrowser: %s", e)
                 
-                return str(profile_no)
+                return profile_id
             else:
                 logging.warning("Failed to activate window, but profile is active")
-                return str(profile_no)
+                return profile_id
     
     # Шаг 2: Профиль не активен - открываем его через API v2
-    logging.info("Profile No %s is not active, opening new instance...", profile_no)
+    logging.info("Profile ID %s (No: %s) is not active, opening new instance...", profile_id, profile_no)
     
     # Используем правильный endpoint для API v2
     endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
@@ -421,9 +444,9 @@ def open_ads_power_profile(profile_no: int) -> Optional[str]:
         headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
         logging.debug("  Using API key for authentication")
     
-    # Формируем payload с profile_no (в формате строки)
+    # Формируем payload с profile_id
     payload = {
-        "profile_no": str(profile_no)
+        "profile_id": profile_id
     }
     
     try:
@@ -439,7 +462,7 @@ def open_ads_power_profile(profile_no: int) -> Optional[str]:
             logging.debug("  Response data: %s", data)
             
             if data.get("code") == 0:
-                logging.info("✓ Profile No %s opened successfully", profile_no)
+                logging.info("✓ Profile ID %s (No: %s) opened successfully", profile_id, profile_no)
                 # Ждём немного, чтобы браузер успел открыться
                 time.sleep(3)
                 
@@ -450,7 +473,7 @@ def open_ads_power_profile(profile_no: int) -> Optional[str]:
                 except Exception as e:
                     logging.warning("Failed to open URL via webbrowser: %s", e)
                 
-                return str(profile_no)
+                return profile_id
             else:
                 error_msg = data.get("msg", data.get("message", "Unknown error"))
                 error_code = data.get("code", "N/A")
@@ -509,14 +532,15 @@ def close_ads_power_profile(profile_id: int) -> bool:
         return False
 
 
-def post_article_to_medium(article: dict, profile_no: int) -> Optional[str]:
+def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     """
     Публикует статью на Medium через PyAutoGUI.
     Возвращает URL опубликованной статьи или None в случае ошибки.
     """
     article_id = article.get('id') if isinstance(article, dict) else article[0]
+    profile_no = get_profile_no(profile_id)
     logging.info("="*60)
-    logging.info("Posting article ID %s using profile No %s", article_id, profile_no)
+    logging.info("Posting article ID %s using profile ID %s (No: %s)", article_id, profile_id, profile_no)
     logging.info("="*60)
     
     try:
@@ -816,18 +840,19 @@ def main():
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             
             # Выбираем профиль (циклический перебор)
-            profile_no = PROFILE_NOS[profile_index % len(PROFILE_NOS)]
+            profile_id = PROFILE_IDS[profile_index % len(PROFILE_IDS)]
+            profile_no = get_profile_no(profile_id)
             profile_index += 1
             
             logging.info("")
             logging.info("="*60)
-            logging.info("Processing article ID %s with profile No %s", article_id, profile_no)
+            logging.info("Processing article ID %s with profile ID %s (No: %s)", article_id, profile_id, profile_no)
             logging.info("="*60)
             
             # Открываем профиль Ads Power
-            result = open_ads_power_profile(profile_no)
+            result = open_ads_power_profile(profile_id)
             if not result:
-                logging.error("Failed to open profile No %s, skipping article ID %s", profile_no, article_id)
+                logging.error("Failed to open profile ID %s (No: %s), skipping article ID %s", profile_id, profile_no, article_id)
                 failed_count += 1
                 continue
             
@@ -836,10 +861,10 @@ def main():
             
             try:
                 # Публикуем статью
-                url = post_article_to_medium(article, profile_no)
+                url = post_article_to_medium(article, profile_id)
                 
                 if url:
-                    # Обновляем БД (сохраняем profile_no как profile_id в БД)
+                    # Обновляем БД (сохраняем profile_no в колонку profile_id для удобства)
                     update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                     posted_count += 1
                     logging.info("✓ Article ID %s posted successfully!", article_id)
