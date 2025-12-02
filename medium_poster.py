@@ -421,10 +421,12 @@ def html_to_plain_text(html: str) -> str:
     return text.strip()
 
 
-def prepare_cf_html(html_fragment: str) -> str:
+def prepare_cf_html(html_fragment: str) -> bytes:
     """
     Подготавливает HTML для формата CF_HTML (Windows clipboard format).
     CF_HTML имеет специальную структуру с заголовком и позицией фрагмента.
+    Возвращает bytes для правильной работы с win32clipboard.
+    Позиции должны вычисляться в байтах UTF-8.
     """
     # Базовый HTML с DOCTYPE и т.д.
     html_start = """<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
@@ -440,36 +442,48 @@ def prepare_cf_html(html_fragment: str) -> str:
     # Собираем полный HTML (без заголовка пока)
     full_html = html_start + fragment_start_marker + html_fragment + fragment_end_marker + html_end
     
-    # Вычисляем позиции относительно начала полного HTML
-    start_html_pos = len(html_start)
-    start_fragment_pos = start_html_pos + len(fragment_start_marker)
-    end_fragment_pos = start_fragment_pos + len(html_fragment)
-    end_html_pos = end_fragment_pos + len(fragment_end_marker) + len(html_end)
+    # Кодируем в UTF-8 для правильного вычисления позиций в байтах
+    html_start_bytes = html_start.encode('utf-8')
+    fragment_start_marker_bytes = fragment_start_marker.encode('utf-8')
+    html_fragment_bytes = html_fragment.encode('utf-8')
+    fragment_end_marker_bytes = fragment_end_marker.encode('utf-8')
+    html_end_bytes = html_end.encode('utf-8')
+    full_html_bytes = full_html.encode('utf-8')
     
-    # Формируем заголовок CF_HTML
-    header = f"""Version:0.9
+    # Вычисляем позиции в байтах относительно начала полного HTML
+    start_html_pos = len(html_start_bytes)
+    start_fragment_pos = start_html_pos + len(fragment_start_marker_bytes)
+    end_fragment_pos = start_fragment_pos + len(html_fragment_bytes)
+    end_html_pos = len(full_html_bytes)
+    
+    # Формируем заголовок CF_HTML (временно, для вычисления его длины)
+    temp_header = f"""Version:0.9
 StartHTML:{start_html_pos:09d}
 EndHTML:{end_html_pos:09d}
 StartFragment:{start_fragment_pos:09d}
 EndFragment:{end_fragment_pos:09d}
 """
     
-    # Вычисляем реальные позиции с учётом заголовка
-    header_len = len(header)
-    start_html_pos_final = header_len + start_html_pos
-    end_html_pos_final = header_len + end_html_pos
+    # Вычисляем реальные позиции с учётом заголовка (в байтах UTF-8)
+    header_bytes = temp_header.encode('utf-8')
+    header_len = len(header_bytes)
+    
+    # Финальные позиции: позиция в заголовке + позиция в HTML
+    start_html_pos_final = header_len
+    end_html_pos_final = header_len + len(full_html_bytes)
     start_fragment_pos_final = header_len + start_fragment_pos
     end_fragment_pos_final = header_len + end_fragment_pos
     
     # Формируем финальный CF_HTML с правильными позициями
-    cf_html = f"""Version:0.9
+    cf_html_str = f"""Version:0.9
 StartHTML:{start_html_pos_final:09d}
 EndHTML:{end_html_pos_final:09d}
 StartFragment:{start_fragment_pos_final:09d}
 EndFragment:{end_fragment_pos_final:09d}
 {full_html}"""
     
-    return cf_html
+    # Возвращаем как bytes
+    return cf_html_str.encode('utf-8')
 
 
 def copy_markdown_as_rich_text(markdown_text: str) -> bool:
@@ -484,12 +498,11 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
         # Шаг 2: Извлекаем plain text для подстраховки
         plain_text = html_to_plain_text(html_fragment)
         
-        # Шаг 3: Подготавливаем CF_HTML формат
-        cf_html = prepare_cf_html(html_fragment)
+        # Шаг 3: Подготавливаем CF_HTML формат (возвращает bytes)
+        cf_html_bytes = prepare_cf_html(html_fragment)
         
         # Шаг 4: Копируем в буфер обмена
-        # Используем pyperclip для HTML (он поддерживает HTML формат)
-        # Но для гарантии используем прямой доступ к Windows clipboard через win32clipboard
+        # Используем прямой доступ к Windows clipboard через win32clipboard
         try:
             import win32clipboard
             import win32con
@@ -498,8 +511,8 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
             
-            # Устанавливаем HTML формат (CF_HTML)
-            win32clipboard.SetClipboardData(win32con.CF_HTML, cf_html.encode('utf-8'))
+            # Устанавливаем HTML формат (CF_HTML) - передаем bytes напрямую
+            win32clipboard.SetClipboardData(win32con.CF_HTML, cf_html_bytes)
             
             # Также устанавливаем plain text для совместимости
             win32clipboard.SetClipboardData(win32con.CF_TEXT, plain_text.encode('utf-8'))
@@ -507,7 +520,8 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
             # Закрываем буфер обмена
             win32clipboard.CloseClipboard()
             
-            logging.debug("Markdown copied to clipboard as Rich Text (HTML format)")
+            logging.debug("Markdown copied to clipboard as Rich Text (HTML format, CF_HTML)")
+            logging.debug("  CF_HTML size: %d bytes", len(cf_html_bytes))
             return True
         except ImportError:
             # Fallback: используем pyperclip (может не поддерживать HTML напрямую)
@@ -976,17 +990,32 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         # Шаг 5: Вставляем body как Rich Text (HTML)
         logging.info("STEP 5: Pasting body as Rich Text (HTML)...")
         logging.info("  Body length: %d characters", len(body))
+        
+        # Даем Medium время обработать Enter и переключить фокус на поле body
+        time.sleep(1)
+        
         try:
-            # Конвертируем Markdown в HTML и копируем как Rich Text
+            # Конвертируем Markdown в HTML и копируем как Rich Text в буфер обмена
+            logging.debug("  Converting Markdown to HTML and copying to clipboard as CF_HTML...")
             if not copy_markdown_as_rich_text(body):
                 logging.warning("  Failed to copy as Rich Text, falling back to plain text")
                 pyperclip.copy(body)
+            else:
+                logging.debug("  ✓ HTML copied to clipboard in CF_HTML format")
             
-            time.sleep(0.2)
+            # Небольшая задержка перед вставкой
+            time.sleep(0.3)
+            
+            # Вставляем через Ctrl+V (PyAutoGUI)
+            logging.debug("  Pasting via Ctrl+V...")
             pyautogui.hotkey('ctrl', 'v')
+            
+            # Даем время на обработку вставки
+            time.sleep(0.5)
+            
             logging.info("  ✓ Body pasted successfully as Rich Text")
         except Exception as e:
-            logging.error("  ✗ Failed to paste body: %s", e)
+            logging.error("  ✗ Failed to paste body: %s", e, exc_info=True)
             return None
         
         wait_with_log(WAIT_AFTER_BODY_PASTE, "STEP 5", 10.0)
