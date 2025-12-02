@@ -461,32 +461,32 @@ def ensure_profile_ready(profile_no: int) -> bool:
         logging.error("Missing selenium address or webdriver path for profile %d", profile_no)
         return False
     
-        # Создаём Selenium драйвер
+    # Создаём Selenium драйвер
+    try:
+        chrome_options = Options()
+        chrome_options.add_experimental_option("debuggerAddress", selenium_address)
+        
+        service = Service(webdriver_path)
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Максимизируем окно через Selenium (если ещё не максимизировано)
         try:
-            chrome_options = Options()
-            chrome_options.add_experimental_option("debuggerAddress", selenium_address)
-            
-            service = Service(webdriver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            # Максимизируем окно через Selenium (если ещё не максимизировано)
-            try:
-                driver.maximize_window()
-                time.sleep(0.5)
-            except Exception as max_err:
-                # Окно уже максимизировано - это нормально, просто пропускаем
-                logging.debug("  Window already maximized (or maximize failed): %s", max_err)
-                time.sleep(0.2)
-            
-            # Устанавливаем уникальный window_tag через document.title
-            driver.get("about:blank")
-            driver.execute_script(f"document.title = '{profile.window_tag}';")
+            driver.maximize_window()
             time.sleep(0.5)
-            
-            profile.driver = driver
-            logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
-                        profile_no, profile.profile_id, profile.window_tag)
-            return True
+        except Exception as max_err:
+            # Окно уже максимизировано - это нормально, просто пропускаем
+            logging.debug("  Window already maximized (or maximize failed): %s", max_err)
+            time.sleep(0.2)
+        
+        # Устанавливаем уникальный window_tag через document.title
+        driver.get("about:blank")
+        driver.execute_script(f"document.title = '{profile.window_tag}';")
+        time.sleep(0.5)
+        
+        profile.driver = driver
+        logging.info("✓ Profile %d (ID: %s) ready with window_tag: %s", 
+                    profile_no, profile.profile_id, profile.window_tag)
+        return True
         
     except Exception as e:
         logging.error("Error creating Selenium driver for profile %d: %s", profile_no, e)
