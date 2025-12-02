@@ -839,11 +839,14 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         # Шаг 10: Кликаем на финальную кнопку Publish
         logging.info("STEP 10: Clicking final Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_2)
-        logging.info("  Waiting 5 seconds before clicking final Publish...")
-        time.sleep(5)  # Ожидание перед нажатием финальной кнопки Publish
+        logging.info("  Waiting 3 seconds before clicking final Publish...")
+        time.sleep(3)  # Ожидание перед нажатием финальной кнопки Publish
         try:
             pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
-            logging.info("  ✓ Clicked successfully")
+            logging.info("  ✓ First click successful")
+            time.sleep(1)  # Ждём 1 секунду перед вторым кликом
+            pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
+            logging.info("  ✓ Second click successful")
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
