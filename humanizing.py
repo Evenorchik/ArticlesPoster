@@ -13,8 +13,8 @@ from datetime import datetime
 from typing import Tuple, Optional, List, Iterable
 
 # ---------- prompts / config ----------
-from prompts import prompt_4
-from config import OPENAI_API_KEY, OPENAI_MODEL  # для шага структурирования (prompt_4)
+from prompts import prompt_4, prompt_4_links
+from config import OPENAI_API_KEY, OPENAI_MODEL, ALTERNATIVE_PROMPT_FREQUENCY  # для шага структурирования (prompt_4)
 # reasoning-модель для лёгкого перефразирования
 OPENAI_MODEL_THINKING = os.getenv("OPENAI_MODEL_THINKING", "gpt-5.1-thinking")
 
@@ -75,23 +75,36 @@ def create_refined_table_sqlite(conn: sqlite3.Connection, table_name: str) -> No
     """
     qname = quote_ident_sqlite(table_name)
     with closing(conn.cursor()) as cur:
-        cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS {qname} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                topic TEXT,
-                title TEXT,
-                body TEXT,
-                links TEXT,
-                keywords TEXT,
-                hashtag1 TEXT,
-                hashtag2 TEXT,
-                hashtag3 TEXT,
-                hashtag4 TEXT,
-                url TEXT,
-                approval TEXT,
-                created_at TEXT
-            )
-        """)
+        # Проверяем, существует ли таблица
+        cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name={qname}")
+        table_exists = cur.fetchone() is not None
+        
+        if not table_exists:
+            cur.execute(f"""
+                CREATE TABLE {qname} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT,
+                    title TEXT,
+                    body TEXT,
+                    links TEXT,
+                    keywords TEXT,
+                    hashtag1 TEXT,
+                    hashtag2 TEXT,
+                    hashtag3 TEXT,
+                    hashtag4 TEXT,
+                    url TEXT,
+                    approval TEXT,
+                    is_link TEXT,
+                    created_at TEXT
+                )
+            """)
+        else:
+            # Проверяем, есть ли колонка is_link, если нет - добавляем
+            cur.execute(f"PRAGMA table_info({qname})")
+            columns = [col[1] for col in cur.fetchall()]
+            if 'is_link' not in columns:
+                cur.execute(f"ALTER TABLE {qname} ADD COLUMN is_link TEXT")
+        
         conn.commit()
     logging.debug("Table %s ensured in SQLite.", table_name)
 
@@ -123,12 +136,21 @@ def create_refined_table_postgres(pg_table: str) -> None:
         hashtag4 TEXT,
         url TEXT,
         approval TEXT,
+        is_link TEXT,
         created_at TIMESTAMPTZ
     );
     """
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(ddl)
+            # Проверяем, есть ли колонка is_link, если нет - добавляем
+            cur.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = %s AND column_name = 'is_link'
+            """, (pg_table,))
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE {pg_table} ADD COLUMN is_link TEXT")
         conn.commit()
     logging.debug("Table %s ensured in Postgres.", pg_table)
 
@@ -160,7 +182,7 @@ def get_raw_article_sqlite(conn: sqlite3.Connection, article_id: int) -> Optiona
 def insert_refined_article_sqlite(conn: sqlite3.Connection, table_name: str,
                                   topic: str, title: str, body: str,
                                   links: str, keywords: str, hashtags: List[str],
-                                  url: str = "", approval: str = "") -> None:
+                                  url: str = "", approval: str = "", is_link: str = "no") -> None:
     hashtag1 = hashtags[0] if len(hashtags) > 0 else ""
     hashtag2 = hashtags[1] if len(hashtags) > 1 else ""
     hashtag3 = hashtags[2] if len(hashtags) > 2 else ""
@@ -169,17 +191,17 @@ def insert_refined_article_sqlite(conn: sqlite3.Connection, table_name: str,
     with closing(conn.cursor()) as cur:
         cur.execute(f"""
             INSERT INTO {qname}
-                (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval,
+                (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, is_link, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, is_link,
               datetime.utcnow().isoformat(timespec="seconds") + "Z"))
         conn.commit()
-    logging.info("Refined article inserted into SQLite table %s.", table_name)
+    logging.info("Refined article inserted into SQLite table %s (is_link=%s).", table_name, is_link)
 
 def insert_refined_article_postgres(pg_table: str,
                                     topic: str, title: str, body: str,
                                     links: str, keywords: str, hashtags: List[str],
-                                    url: str = "", approval: str = "") -> None:
+                                    url: str = "", approval: str = "", is_link: str = "no") -> None:
     hashtag1 = hashtags[0] if len(hashtags) > 0 else ""
     hashtag2 = hashtags[1] if len(hashtags) > 1 else ""
     hashtag3 = hashtags[2] if len(hashtags) > 2 else ""
@@ -189,17 +211,17 @@ def insert_refined_article_postgres(pg_table: str,
             cur.execute(
                 f"""
                 INSERT INTO {pg_table}
-                    (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, is_link, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     topic, title, body, links, keywords,
                     hashtag1, hashtag2, hashtag3, hashtag4,
-                    url, approval, datetime.utcnow()
+                    url, approval, is_link, datetime.utcnow()
                 )
             )
         conn.commit()
-    logging.info("Refined article inserted into Postgres table %s.", pg_table)
+    logging.info("Refined article inserted into Postgres table %s (is_link=%s).", pg_table, is_link)
 
 
 # ---------- OpenAI Responses API wrappers ----------
@@ -364,7 +386,8 @@ def parse_id_selection(s: str) -> List[int]:
 def process_article(article_id: int,
                     conn_sqlite: sqlite3.Connection,
                     sqlite_table: str,
-                    pg_table: str) -> None:
+                    pg_table: str,
+                    article_index: int = 0) -> None:
     logging.info("Processing raw article ID: %s", article_id)
     raw_article = get_raw_article_sqlite(conn_sqlite, article_id)
     if not raw_article:
@@ -421,20 +444,35 @@ def process_article(article_id: int,
     humanized_text = pyperclip.paste()
     logging.debug("Humanized text retrieved (first 200 chars): %s", humanized_text[:200])
 
-    # (Шаг 2) структурирование prompt_4 через OpenAI
-    formatted_prompt_4 = prompt_4.replace("{ARTICLE TEXT}", humanized_text)
+    # (Шаг 2) структурирование через OpenAI
+    # Определяем, какой промпт использовать (каждая N-я статья с альтернативным промптом)
+    # article_index - это индекс статьи в текущей сессии обработки (0-based)
+    use_alternative_prompt = (article_index + 1) % ALTERNATIVE_PROMPT_FREQUENCY == 0
+    
+    if use_alternative_prompt:
+        selected_prompt = prompt_4_links
+        is_link_value = "yes"
+        logging.info("Using alternative prompt (prompt_4_links) for article ID %s (article %d of batch, every %d-th article)", 
+                    article_id, article_index + 1, ALTERNATIVE_PROMPT_FREQUENCY)
+    else:
+        selected_prompt = prompt_4
+        is_link_value = "no"
+        logging.info("Using standard prompt (prompt_4) for article ID %s (article %d of batch)", 
+                    article_id, article_index + 1)
+    
+    formatted_prompt = selected_prompt.replace("{ARTICLE TEXT}", humanized_text)
     conversation = [
         {"role": "assistant", "content": humanized_text},
-        {"role": "user", "content": formatted_prompt_4},
+        {"role": "user", "content": formatted_prompt},
     ]
 
-    logging.info("Sending humanized text to OpenAI with prompt_4.")
+    logging.info("Sending humanized text to OpenAI with %s.", "prompt_4_links" if use_alternative_prompt else "prompt_4")
     response_4, _ = get_openai_response(conversation)
     if not response_4:
-        logging.error("Failed to get response for prompt_4 for article ID %s.", article_id)
+        logging.error("Failed to get response for article ID %s.", article_id)
         return
 
-    logging.debug("Received response from prompt_4 (first 500 chars): %s", response_4[:500])
+    logging.debug("Received response (first 500 chars): %s", response_4[:500])
 
     refined_title, refined_body, links, keywords, hashtags = parse_refined_response(response_4)
     if not refined_title or not refined_body:
@@ -444,13 +482,15 @@ def process_article(article_id: int,
     # (Шаг 3) ДВЕ записи: SQLite + Postgres
     # 3.1 SQLite
     try:
-        insert_refined_article_sqlite(conn_sqlite, sqlite_table, topic, refined_title, refined_body, links, keywords, hashtags)
+        insert_refined_article_sqlite(conn_sqlite, sqlite_table, topic, refined_title, refined_body, links, keywords, hashtags, 
+                                     is_link=is_link_value)
     except Exception as e:
         logging.error("SQLite insert failed for article ID %s: %s", article_id, e)
 
     # 3.2 Postgres
     try:
-        insert_refined_article_postgres(pg_table, topic, refined_title, refined_body, links, keywords, hashtags)
+        insert_refined_article_postgres(pg_table, topic, refined_title, refined_body, links, keywords, hashtags, 
+                                       is_link=is_link_value)
     except Exception as e:
         logging.error("Postgres insert failed for article ID %s: %s", article_id, e)
 
@@ -501,8 +541,8 @@ def main():
         create_refined_table_postgres(pg_table)
 
         # обработка
-        for article_id in article_ids:
-            process_article(article_id, conn_sqlite, sqlite_table, pg_table)
+        for idx, article_id in enumerate(article_ids):
+            process_article(article_id, conn_sqlite, sqlite_table, pg_table, article_index=idx)
             time.sleep(5)  # пауза опционально
 
     finally:

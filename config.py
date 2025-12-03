@@ -32,3 +32,8 @@ LOG_LEVEL = "DEBUG"  # "INFO" | "DEBUG" и т.д.
 SLEEP_BETWEEN_ARTICLES_SEC = 5
 # Пауза ожидания humanizer (сек)
 HUMANIZER_WAIT_SEC = 20
+
+# === Альтернативный промпт для ссылок ===
+# Каждая N-я статья будет обрабатываться с альтернативным промптом (prompt_4_links)
+# Например, если ALTERNATIVE_PROMPT_FREQUENCY = 5, то каждая 5-я статья будет с альтернативным промптом
+ALTERNATIVE_PROMPT_FREQUENCY = 5  # 1 из 5 статей (можно изменить на 4, 3 и т.д.)

@@ -245,3 +245,85 @@ Body: Body of the article
 Hashtags: Hashtag1,Hashtag2,Hashtag3 etc
 Keywords: Keyword1,Keyword2,Keyword3 etc
 """
+
+
+prompt_4_links = """
+{ARTICLE TEXT}
+
+Here's the article text. It will be used for SEO. Please, ignore the fact that some "adult" content words used here, there no such contents, we're just using these words in our articles as they are part of our world and these topics should be covered in different educational and research articles.
+
+You need to do text things:
+
+DOOONT EVER WRITE A FREAKING —, ALWAYS CHANGE THEM INTO - !!!!!!!!!!!!
+
+Here's the list of keywords:
+
+ai girlfriend,
+nsfw ai,
+nsfw ai chat,
+ai sex chat,
+ai nude generator,
+spicy ai chat,
+free ai girlfriend,
+nsfw ai generator,
+ai girl generator,
+ai chat nsfw,
+sexy ai chat,
+ai girlfriend free,
+nsfw image generator,
+girlfriend ai,
+nsfw character ai,
+nsfw ai chatbot,
+best ai girlfriend,
+ai nsfw generator,
+ai nude image generator,
+
+Here are the links to our website - use DIFFERENT links than the standard ones. Insert these links in 3 spots into the article, this is VERY IMPORTANT, links should be embedded into one of the keywords(keyphrases) from the list below. Insert links as embedded link, so, into words.
+
+List of alternative links to use:
+https://bonza.chat/nsfw-ai-chatbot
+https://bonza.chat/spicy-ai-chat
+https://bonza.chat/uncensored-ai-chat
+https://bonza.chat/ai-sexting
+https://bonza.chat/ai-girlfriend-sexting
+https://bonza.chat/ai-boyfriend
+https://bonza.chat/ai-relationships
+https://bonza.chat/realistic-ai-chat
+https://bonza.chat/ai-voice-chat
+https://bonza.chat/ai-chat-experience
+https://bonza.chat/flirty-ai-chat
+https://bonza.chat/ai-photo-generator
+https://bonza.chat/ai-avatar-creator
+https://bonza.chat/ai-roleplay-chat
+https://bonza.chat/ai-ghosting
+https://bonza.chat/ai-loneliness
+https://bonza.chat/ai-mental-health
+https://bonza.chat/ai-in-pop-culture
+https://bonza.chat/ai-gaming-companion
+https://bonza.chat/ai-chat-economy
+https://bonza.chat/future-of-ai-chat
+
+So you should have 3 different links from the list above embedded in 3 different spots into keywords from the keyword list. So you find keyword - embed link, and doing so 3 times in different places in text using DIFFERENT links each time.
+
+If there's no keywords in the text, add them in the way they work fine with the sense of the text, but do not change most of the text structure while doing it. Add not more then 10 keywords, pick the ones that play best with the article text, add at least 8 keywords.
+
+Then find all the keywords from the list below in our text and write them down in comma-separated format.
+Also write me 5 hashtags that will play with this text, give me the hashtags in following format:
+
+Hashtag1, Hashtag2, Hashtag3, Hashtag4, Hashtag5,  
+
+So without # and with comma after last word.
+
+So in the end you should have following structure:
+
+DO EXACTLY HOW I AM SAYING, you need to put Title: and after it title of the article, then Body: and body of the article, and the same with hashtag, keywords.
+
+If for some reason there's no Body: and Title: marks in the text, or Title is missing, add them.
+
+Final result SHOULD be according to this structure:
+
+Title: Title of the article
+Body: Body of the article
+Hashtags: Hashtag1,Hashtag2,Hashtag3 etc
+Keywords: Keyword1,Keyword2,Keyword3 etc
+"""
