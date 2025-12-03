@@ -419,6 +419,26 @@ def process_article(article_id: int,
     pyautogui.click(*SCROLL_COORDS_TWO)
     time.sleep(0.5)
 
+    logging.info("Clicking on input coordinates: %s", SCROLL_COORDS_TWO)
+    pyautogui.click(*SCROLL_COORDS_TWO)
+    time.sleep(0.5)
+
+    logging.info("Clicking on input coordinates: %s", SCROLL_COORDS_TWO)
+    pyautogui.click(*SCROLL_COORDS_TWO)
+    time.sleep(0.5)
+
+    logging.info("Clicking on input coordinates: %s", SCROLL_COORDS_TWO)
+    pyautogui.click(*SCROLL_COORDS_TWO)
+    time.sleep(0.5)
+
+    logging.info("Clicking on input coordinates: %s", SCROLL_COORDS_TWO)
+    pyautogui.click(*SCROLL_COORDS_TWO)
+    time.sleep(0.5)
+
+    logging.info("Clicking on input coordinates: %s", SCROLL_COORDS_TWO)
+    pyautogui.click(*SCROLL_COORDS_TWO)
+    time.sleep(0.5)
+                        
     logging.info("Clicking on input coordinates: %s", COPY_COORDS)
     pyautogui.click(*COPY_COORDS)
     time.sleep(0.5)
