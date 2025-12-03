@@ -22,9 +22,9 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 # ---------- координаты (как у тебя) ----------
 SCROLL_COORDS = (1673, 463)
 PASTE_COORDS = (446, 216)
-HUMANIZE_COORDS = (484, 876)
-SCROLL_COORDS_TWO = (1672, 247)
-COPY_COORDS = (1357, 840)
+HUMANIZE_COORDS = (502, 814)
+SCROLL_COORDS_TWO = (1670, 125)
+COPY_COORDS = (1361, 820)
 HUMANIZER_URL = "https://gpthumanizer.io/"
 
 # ---------- HTTP session (необяз.)
