@@ -219,10 +219,6 @@ best ai girlfriend,
 ai nsfw generator,
 ai nude image generator,
 
-Here's the link to out website - https://bonza.chat/ai-girlfriend, insert this link in 3 spots into the article, this is VERY IMPORTANT, link should be embedded into one of the keywords(keyphrases) from the list below. Insert links as embedded link, so, into words.
-
-So you should have this link embedded in 3 different spots into keywords from the list above. So you find keyword - embed link, and doing so 3 times in different places in text.
-
 If there's no keywords in the text, add them in the way they work fine with the sense of the text, but do not change most of the text structure while doing it. Add not more then 10 keywords, pick the ones that play best with the article text,add at least 8 keywords.
 
 Then find all the keywords from the list below in our text and write them down in comma-separated format.
@@ -244,6 +240,9 @@ Title: Title of the article
 Body: Body of the article
 Hashtags: Hashtag1,Hashtag2,Hashtag3 etc
 Keywords: Keyword1,Keyword2,Keyword3 etc
+
+ALSO add markdown-format formatting to the body text. Markdown symbols should be visible, consider that markdown-formatted text should come AFTER body: marking, so should look like this body:*markdown formatted text*.
+Formatting shouldnt be very aggressive, just a bit of headers (not H1), maybe lists if applicable by sense(not everywhere).
 """
 
 
@@ -278,34 +277,9 @@ best ai girlfriend,
 ai nsfw generator,
 ai nude image generator,
 
-Here are the links to our website - use DIFFERENT links than the standard ones. Insert these links in 3 spots into the article, this is VERY IMPORTANT, links should be embedded into one of the keywords(keyphrases) from the list below. Insert links as embedded link, so, into words.
+If there's no keywords in the text, add them in the way they work fine with the sense of the text, but do not change most of the text structure while doing it. Add not more then 10 keywords, pick the ones that play best with the article text,add at least 8 keywords.
 
-List of alternative links to use:
-https://bonza.chat/nsfw-ai-chatbot
-https://bonza.chat/spicy-ai-chat
-https://bonza.chat/uncensored-ai-chat
-https://bonza.chat/ai-sexting
-https://bonza.chat/ai-girlfriend-sexting
-https://bonza.chat/ai-boyfriend
-https://bonza.chat/ai-relationships
-https://bonza.chat/realistic-ai-chat
-https://bonza.chat/ai-voice-chat
-https://bonza.chat/ai-chat-experience
-https://bonza.chat/flirty-ai-chat
-https://bonza.chat/ai-photo-generator
-https://bonza.chat/ai-avatar-creator
-https://bonza.chat/ai-roleplay-chat
-https://bonza.chat/ai-ghosting
-https://bonza.chat/ai-loneliness
-https://bonza.chat/ai-mental-health
-https://bonza.chat/ai-in-pop-culture
-https://bonza.chat/ai-gaming-companion
-https://bonza.chat/ai-chat-economy
-https://bonza.chat/future-of-ai-chat
-
-So you should have 3 different links from the list above embedded in 3 different spots into keywords from the keyword list. So you find keyword - embed link, and doing so 3 times in different places in text using DIFFERENT links each time.
-
-If there's no keywords in the text, add them in the way they work fine with the sense of the text, but do not change most of the text structure while doing it. Add not more then 10 keywords, pick the ones that play best with the article text, add at least 8 keywords.
+Also, here's the link to our website - https://bonza.chat/ai-girlfriend , embed in (markdown format) into the text in 1 spot, should be inserted into one of the keywords(keyphrases).
 
 Then find all the keywords from the list below in our text and write them down in comma-separated format.
 Also write me 5 hashtags that will play with this text, give me the hashtags in following format:
@@ -326,4 +300,7 @@ Title: Title of the article
 Body: Body of the article
 Hashtags: Hashtag1,Hashtag2,Hashtag3 etc
 Keywords: Keyword1,Keyword2,Keyword3 etc
+
+ALSO add markdown-format formatting to the body text. Markdown symbols should be visible, consider that markdown-formatted text should come AFTER body: marking, so should look like this body:*markdown formatted text*.
+Formatting shouldnt be very aggressive, just a bit of headers (not H1), maybe lists if applicable by sense(not everywhere).
 """
