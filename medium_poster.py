@@ -168,11 +168,7 @@ def get_refined_articles_tables(pg_conn) -> List[str]:
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
-        AND (
-            table_name LIKE 'Refined_articles-%'
-            OR table_name LIKE 'refined_articles_%'
-            OR table_name LIKE 'RefinedArticles%'
-        )
+        AND table_name LIKE 'refined_articles_%'
         ORDER BY table_name
     """)
     

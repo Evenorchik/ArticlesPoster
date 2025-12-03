@@ -6,9 +6,7 @@ import requests
 import pyautogui
 import pyperclip
 import webbrowser
-import sqlite3
 from openai import OpenAI
-from contextlib import closing
 from datetime import datetime
 from typing import Tuple, Optional, List, Iterable
 
@@ -50,59 +48,12 @@ except ImportError:
 
 # ---------- УТИЛИТЫ И БД-ХЕЛПЕРЫ ----------
 
-def get_db_path() -> str:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "articles.db")
-
-def quote_ident_sqlite(name: str) -> str:
-    # простая безопасная кавычка для SQLite
-    return f"\"{name}\""
-
 def normalize_pg_table_name(iteration: int) -> str:
     """
     Для Postgres дефисы в именах — неудобно (нужны кавычки в каждом запросе).
     Делаем snake_case: refined_articles_<N>
     """
     return f"refined_articles_{iteration}"
-
-def create_refined_table_sqlite(conn: sqlite3.Connection, table_name: str) -> None:
-    """
-    SQLite: создаёт таблицу по имени вида Refined_articles-<N>.
-    """
-    qname = quote_ident_sqlite(table_name)
-    with closing(conn.cursor()) as cur:
-        # Проверяем, существует ли таблица
-        cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name={qname}")
-        table_exists = cur.fetchone() is not None
-        
-        if not table_exists:
-            cur.execute(f"""
-                CREATE TABLE {qname} (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    topic TEXT,
-                    title TEXT,
-                    body TEXT,
-                    links TEXT,
-                    keywords TEXT,
-                    hashtag1 TEXT,
-                    hashtag2 TEXT,
-                    hashtag3 TEXT,
-                    hashtag4 TEXT,
-                    url TEXT,
-                    approval TEXT,
-                    is_link TEXT,
-                    created_at TEXT
-                )
-            """)
-        else:
-            # Проверяем, есть ли колонка is_link, если нет - добавляем
-            cur.execute(f"PRAGMA table_info({qname})")
-            columns = [col[1] for col in cur.fetchall()]
-            if 'is_link' not in columns:
-                cur.execute(f"ALTER TABLE {qname} ADD COLUMN is_link TEXT")
-        
-        conn.commit()
-    logging.debug("Table %s ensured in SQLite.", table_name)
 
 def get_pg_conn():
     """
@@ -139,6 +90,7 @@ def get_pg_conn():
 def create_refined_table_postgres(pg_table: str) -> None:
     """
     Postgres: создаёт таблицу refined_articles_<N>, если её нет.
+    Структура должна совпадать с тем, что читает medium_poster.py.
     """
     ddl = f"""
     CREATE TABLE IF NOT EXISTS {pg_table} (
@@ -155,14 +107,16 @@ def create_refined_table_postgres(pg_table: str) -> None:
         url TEXT,
         approval TEXT,
         is_link TEXT,
-        created_at TIMESTAMPTZ
+        created_at TIMESTAMPTZ,
+        profile_id INTEGER
     );
     """
     conn = get_pg_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(ddl)
-            # Проверяем, есть ли колонка is_link, если нет - добавляем
+            # Проверяем и добавляем недостающие колонки для совместимости
+            # is_link
             cur.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
@@ -170,54 +124,61 @@ def create_refined_table_postgres(pg_table: str) -> None:
             """, (pg_table,))
             if not cur.fetchone():
                 cur.execute(f"ALTER TABLE {pg_table} ADD COLUMN is_link TEXT")
+            # profile_id (medium_poster.py использует эту колонку)
+            cur.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = %s AND column_name = 'profile_id'
+            """, (pg_table,))
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE {pg_table} ADD COLUMN profile_id INTEGER")
         conn.commit()
         logging.debug("Table %s ensured in Postgres.", pg_table)
     finally:
         conn.close()
 
-def list_raw_articles_sqlite(conn: sqlite3.Connection) -> None:
-    with closing(conn.cursor()) as cur:
-        try:
+def list_raw_articles_postgres() -> None:
+    """Список всех raw_articles из PostgreSQL."""
+    conn = get_pg_conn()
+    try:
+        with conn.cursor() as cur:
             cur.execute("SELECT id, title FROM raw_articles ORDER BY id")
-        except sqlite3.OperationalError as e:
-            logging.error("Could not read raw_articles (table missing?). Error: %s", e)
-            return
-        rows = cur.fetchall()
-        if rows:
-            logging.info("Raw articles available:")
-            for row in rows:
-                logging.info("ID: %s, Title: %s", row[0], row[1])
-        else:
-            logging.info("No raw articles found.")
+            rows = cur.fetchall()
+            if rows:
+                logging.info("Raw articles available:")
+                for row in rows:
+                    article_id = row[0] if isinstance(row, (list, tuple)) else row.get('id')
+                    title = row[1] if isinstance(row, (list, tuple)) else row.get('title')
+                    logging.info("ID: %s, Title: %s", article_id, title)
+            else:
+                logging.info("No raw articles found.")
+    except Exception as e:
+        logging.error("Could not read raw_articles from PostgreSQL. Error: %s", e)
+    finally:
+        conn.close()
 
-def get_raw_article_sqlite(conn: sqlite3.Connection, article_id: int) -> Optional[Tuple[str, str, str]]:
-    with closing(conn.cursor()) as cur:
-        cur.execute("SELECT topic, title, body FROM raw_articles WHERE id = ?", (article_id,))
-        row = cur.fetchone()
-    if row:
-        logging.debug("Raw article %s retrieved: %s", article_id, row)
-        return row
-    logging.error("Raw article with ID %s not found.", article_id)
-    return None
+def get_raw_article_postgres(article_id: int) -> Optional[Tuple[str, str, str]]:
+    """Получить raw_article из PostgreSQL по ID."""
+    conn = get_pg_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT topic, title, body FROM raw_articles WHERE id = %s", (article_id,))
+            row = cur.fetchone()
+            if row:
+                if isinstance(row, dict):
+                    result = (row.get('topic', ''), row.get('title', ''), row.get('body', ''))
+                else:
+                    result = (row[0], row[1], row[2])
+                logging.debug("Raw article %s retrieved from PostgreSQL", article_id)
+                return result
+            logging.error("Raw article with ID %s not found in PostgreSQL.", article_id)
+            return None
+    except Exception as e:
+        logging.error("Error retrieving raw article %s from PostgreSQL: %s", article_id, e)
+        return None
+    finally:
+        conn.close()
 
-def insert_refined_article_sqlite(conn: sqlite3.Connection, table_name: str,
-                                  topic: str, title: str, body: str,
-                                  links: str, keywords: str, hashtags: List[str],
-                                  url: str = "", approval: str = "", is_link: str = "no") -> None:
-    hashtag1 = hashtags[0] if len(hashtags) > 0 else ""
-    hashtag2 = hashtags[1] if len(hashtags) > 1 else ""
-    hashtag3 = hashtags[2] if len(hashtags) > 2 else ""
-    hashtag4 = hashtags[3] if len(hashtags) > 3 else ""
-    qname = quote_ident_sqlite(table_name)
-    with closing(conn.cursor()) as cur:
-        cur.execute(f"""
-            INSERT INTO {qname}
-                (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, is_link, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (topic, title, body, links, keywords, hashtag1, hashtag2, hashtag3, hashtag4, url, approval, is_link,
-              datetime.utcnow().isoformat(timespec="seconds") + "Z"))
-        conn.commit()
-    logging.info("Refined article inserted into SQLite table %s (is_link=%s).", table_name, is_link)
 
 def insert_refined_article_postgres(pg_table: str,
                                     topic: str, title: str, body: str,
@@ -411,12 +372,10 @@ def parse_id_selection(s: str) -> List[int]:
 # ---------- основной процесс одной статьи: ДВУХФАЗНАЯ ЗАПИСЬ ----------
 
 def process_article(article_id: int,
-                    conn_sqlite: sqlite3.Connection,
-                    sqlite_table: str,
                     pg_table: str,
                     article_index: int = 0) -> None:
     logging.info("Processing raw article ID: %s", article_id)
-    raw_article = get_raw_article_sqlite(conn_sqlite, article_id)
+    raw_article = get_raw_article_postgres(article_id)
     if not raw_article:
         logging.error("Skipping article ID %s due to retrieval error.", article_id)
         return
@@ -506,73 +465,51 @@ def process_article(article_id: int,
         logging.error("Parsing refined response failed for article ID %s.", article_id)
         return
 
-    # (Шаг 3) ДВЕ записи: SQLite + Postgres
-    # 3.1 Postgres (основная БД)
+    # (Шаг 3) Запись в Postgres
     insert_refined_article_postgres(pg_table, topic, refined_title, refined_body, links, keywords, hashtags, 
                                    is_link=is_link_value)
-    
-    # 3.2 SQLite (бэкап - только то, что успешно записалось в Postgres)
-    try:
-        insert_refined_article_sqlite(conn_sqlite, sqlite_table, topic, refined_title, refined_body, links, keywords, hashtags, 
-                                     is_link=is_link_value)
-    except Exception as e:
-        logging.error("SQLite insert failed for article ID %s: %s", article_id, e)
-        logging.warning("Article saved to Postgres but SQLite backup failed. Continuing...")
 
-    logging.info("Article ID %s processed and saved to tables: Postgres[%s], SQLite[%s].", article_id, pg_table, sqlite_table)
+    logging.info("Article ID %s processed and saved to Postgres table: %s", article_id, pg_table)
 
 
 # ---------- main ----------
 
 def main():
-    # SQLite
-    db_path = get_db_path()
-    conn_sqlite = sqlite3.connect(db_path)
+    # показать «сырые» статьи из PostgreSQL
+    list_raw_articles_postgres()
 
+    # выбор ID
+    sel = input("Enter raw article IDs (comma-separated, ranges allowed e.g. 5-12,14,18): ").strip()
+    if not sel:
+        logging.error("No article IDs provided. Exiting.")
+        return
     try:
-        # показать «сырые» статьи
-        list_raw_articles_sqlite(conn_sqlite)
+        article_ids = parse_id_selection(sel)
+    except Exception:
+        logging.error("Invalid selection format. Exiting.")
+        return
+    if not article_ids:
+        logging.error("No valid IDs after parsing. Exiting.")
+        return
 
-        # выбор ID
-        sel = input("Enter raw article IDs (comma-separated, ranges allowed e.g. 5-12,14,18): ").strip()
-        if not sel:
-            logging.error("No article IDs provided. Exiting.")
-            return
-        try:
-            article_ids = parse_id_selection(sel)
-        except Exception:
-            logging.error("Invalid selection format. Exiting.")
-            return
-        if not article_ids:
-            logging.error("No valid IDs after parsing. Exiting.")
-            return
+    # итерация → имя таблицы
+    it_str = input("Enter ITERATION number (e.g., 1, 2, 3): ").strip()
+    if not it_str.isdigit():
+        logging.error("Iteration must be a positive integer. Exiting.")
+        return
+    iteration = int(it_str)
+    if iteration <= 0:
+        logging.error("Iteration must be >= 1. Exiting.")
+        return
 
-        # итерация → имя таблицы
-        it_str = input("Enter ITERATION number (e.g., 1, 2, 3): ").strip()
-        if not it_str.isdigit():
-            logging.error("Iteration must be a positive integer. Exiting.")
-            return
-        iteration = int(it_str)
-        if iteration <= 0:
-            logging.error("Iteration must be >= 1. Exiting.")
-            return
+    # Postgres-имя — безопасно для идентификаторов
+    pg_table = normalize_pg_table_name(iteration)
+    create_refined_table_postgres(pg_table)  # Если не удастся подключиться - скрипт упадёт с ошибкой
 
-        # SQLite-имя — как ты просил
-        sqlite_table = f"Refined_articles-{iteration}"
-        create_refined_table_sqlite(conn_sqlite, sqlite_table)
-
-        # Postgres-имя — безопасно для идентификаторов
-        pg_table = normalize_pg_table_name(iteration)
-        create_refined_table_postgres(pg_table)  # Если не удастся подключиться - скрипт упадёт с ошибкой
-
-        # обработка
-        for idx, article_id in enumerate(article_ids):
-            process_article(article_id, conn_sqlite, sqlite_table, pg_table, article_index=idx)
-            time.sleep(5)  # пауза опционально
-
-    finally:
-        conn_sqlite.close()
-        logging.debug("SQLite connection closed.")
+    # обработка
+    for idx, article_id in enumerate(article_ids):
+        process_article(article_id, pg_table, article_index=idx)
+        time.sleep(5)  # пауза опционально
 
 
 if __name__ == "__main__":
