@@ -26,6 +26,8 @@ COPY_COORDS = (1357, 840)
 
 # === Логи ===
 LOG_LEVEL = "DEBUG"  # "INFO" | "DEBUG" и т.д.
+LOG_MODE = "SUMMARY"  # "DEBUG" | "SUMMARY" - режим логирования для scheduled_poster
+# DEBUG - полное логирование, SUMMARY - сокращенное (тема, профиль, время, ссылка)
 
 # === Поведение ===
 # Пауза между обработкой статей (сек)
