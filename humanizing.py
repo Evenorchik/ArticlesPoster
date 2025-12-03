@@ -14,13 +14,9 @@ from typing import Tuple, Optional, List, Iterable
 
 # ---------- prompts / config ----------
 from prompts import prompt_4, prompt_4_links
-from config import OPENAI_API_KEY, OPENAI_MODEL, ALTERNATIVE_PROMPT_FREQUENCY  # для шага структурирования (prompt_4)
+from config import OPENAI_API_KEY, OPENAI_MODEL, ALTERNATIVE_PROMPT_FREQUENCY, POSTGRES_DSN  # для шага структурирования (prompt_4)
 # reasoning-модель для лёгкого перефразирования
 OPENAI_MODEL_THINKING = os.getenv("OPENAI_MODEL_THINKING", "gpt-5.1-thinking")
-
-# ---------- Postgres DSN ----------
-# Пример: POSTGRES_DSN=postgresql://fraxi:Art1clesss@127.0.0.1:5432/articles
-POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://fraxi:Art1clesss@127.0.0.1:5432/articles")
 
 # ---------- логирование ----------
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -112,11 +108,33 @@ def get_pg_conn():
     """
     Возвращает подключение к Postgres.
     Поддерживает psycopg v3 (psycopg) и v2 (psycopg2).
+    Таймаут подключения задаётся через connect_timeout в DSN (из config.py).
     """
-    if _pg_v3:
-        return psycopg.connect(POSTGRES_DSN)  # psycopg3
-    else:
-        return psycopg.connect(POSTGRES_DSN)  # psycopg2 совместим по сигнатуре DSN
+    logging.debug("Connecting to PostgreSQL...")
+    try:
+        if _pg_v3:
+            conn = psycopg.connect(POSTGRES_DSN)  # psycopg3 поддерживает connect_timeout в DSN
+        else:
+            # psycopg2: если в DSN нет connect_timeout, добавляем его явно
+            # Парсим DSN для извлечения параметров
+            import urllib.parse as urlparse
+            parsed = urlparse.urlparse(POSTGRES_DSN)
+            params = urlparse.parse_qs(parsed.query)
+            if 'connect_timeout' not in params:
+                # Добавляем connect_timeout=15 если его нет
+                separator = '&' if '?' in POSTGRES_DSN else '?'
+                dsn_with_timeout = f"{POSTGRES_DSN}{separator}connect_timeout=15"
+                conn = psycopg.connect(dsn_with_timeout)
+            else:
+                conn = psycopg.connect(POSTGRES_DSN)
+        logging.info("✓ Connected to PostgreSQL")
+        return conn
+    except Exception as e:
+        logging.error("Failed to connect to PostgreSQL: %s", e)
+        # Скрываем пароль в логах
+        safe_dsn = POSTGRES_DSN.split('@')[0] + '@***' if '@' in POSTGRES_DSN else '***'
+        logging.error("DSN: %s", safe_dsn)
+        raise
 
 def create_refined_table_postgres(pg_table: str) -> None:
     """
@@ -140,7 +158,8 @@ def create_refined_table_postgres(pg_table: str) -> None:
         created_at TIMESTAMPTZ
     );
     """
-    with get_pg_conn() as conn:
+    conn = get_pg_conn()
+    try:
         with conn.cursor() as cur:
             cur.execute(ddl)
             # Проверяем, есть ли колонка is_link, если нет - добавляем
@@ -152,7 +171,9 @@ def create_refined_table_postgres(pg_table: str) -> None:
             if not cur.fetchone():
                 cur.execute(f"ALTER TABLE {pg_table} ADD COLUMN is_link TEXT")
         conn.commit()
-    logging.debug("Table %s ensured in Postgres.", pg_table)
+        logging.debug("Table %s ensured in Postgres.", pg_table)
+    finally:
+        conn.close()
 
 def list_raw_articles_sqlite(conn: sqlite3.Connection) -> None:
     with closing(conn.cursor()) as cur:
@@ -206,7 +227,8 @@ def insert_refined_article_postgres(pg_table: str,
     hashtag2 = hashtags[1] if len(hashtags) > 1 else ""
     hashtag3 = hashtags[2] if len(hashtags) > 2 else ""
     hashtag4 = hashtags[3] if len(hashtags) > 3 else ""
-    with get_pg_conn() as conn:
+    conn = get_pg_conn()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -221,7 +243,12 @@ def insert_refined_article_postgres(pg_table: str,
                 )
             )
         conn.commit()
-    logging.info("Refined article inserted into Postgres table %s (is_link=%s).", pg_table, is_link)
+        logging.info("Refined article inserted into Postgres table %s (is_link=%s).", pg_table, is_link)
+    except Exception as e:
+        logging.error("Failed to insert article into Postgres table %s: %s", pg_table, e)
+        raise
+    finally:
+        conn.close()
 
 
 # ---------- OpenAI Responses API wrappers ----------
@@ -480,21 +507,19 @@ def process_article(article_id: int,
         return
 
     # (Шаг 3) ДВЕ записи: SQLite + Postgres
-    # 3.1 SQLite
+    # 3.1 Postgres (основная БД)
+    insert_refined_article_postgres(pg_table, topic, refined_title, refined_body, links, keywords, hashtags, 
+                                   is_link=is_link_value)
+    
+    # 3.2 SQLite (бэкап - только то, что успешно записалось в Postgres)
     try:
         insert_refined_article_sqlite(conn_sqlite, sqlite_table, topic, refined_title, refined_body, links, keywords, hashtags, 
                                      is_link=is_link_value)
     except Exception as e:
         logging.error("SQLite insert failed for article ID %s: %s", article_id, e)
+        logging.warning("Article saved to Postgres but SQLite backup failed. Continuing...")
 
-    # 3.2 Postgres
-    try:
-        insert_refined_article_postgres(pg_table, topic, refined_title, refined_body, links, keywords, hashtags, 
-                                       is_link=is_link_value)
-    except Exception as e:
-        logging.error("Postgres insert failed for article ID %s: %s", article_id, e)
-
-    logging.info("Article ID %s processed and saved to tables: SQLite[%s], Postgres[%s].", article_id, sqlite_table, pg_table)
+    logging.info("Article ID %s processed and saved to tables: Postgres[%s], SQLite[%s].", article_id, pg_table, sqlite_table)
 
 
 # ---------- main ----------
@@ -538,7 +563,7 @@ def main():
 
         # Postgres-имя — безопасно для идентификаторов
         pg_table = normalize_pg_table_name(iteration)
-        create_refined_table_postgres(pg_table)
+        create_refined_table_postgres(pg_table)  # Если не удастся подключиться - скрипт упадёт с ошибкой
 
         # обработка
         for idx, article_id in enumerate(article_ids):
