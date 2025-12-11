@@ -20,11 +20,11 @@ OPENAI_MODEL_THINKING = os.getenv("OPENAI_MODEL_THINKING", "gpt-5.1-thinking")
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ---------- координаты (как у тебя) ----------
-SCROLL_COORDS = (1673, 463)
-PASTE_COORDS = (446, 216)
-HUMANIZE_COORDS = (502, 814)
-SCROLL_COORDS_TWO = (1670, 125)
-COPY_COORDS = (1361, 820)
+SCROLL_COORDS = (1910, 453)
+PASTE_COORDS = (519, 163)
+HUMANIZE_COORDS = (617, 847)
+SCROLL_COORDS_TWO = (1910, 151)
+COPY_COORDS = (1479, 845)
 HUMANIZER_URL = "https://gpthumanizer.io/"
 
 # ---------- HTTP session (необяз.)

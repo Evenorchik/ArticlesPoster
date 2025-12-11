@@ -89,10 +89,10 @@ PROFILE_SEQUENTIAL_MAPPING = {
 PROFILE_IDS = list(PROFILE_MAPPING.keys())
 
 # Координаты для кликов (из алгоритма пользователя)
-COORDS_TITLE_INPUT = (516, 215)        # Шаг 3: ввод текста (title)
-COORDS_PUBLISH_BUTTON_1 = (1180, 119)  # Шаг 7: первая кнопка Publish
-COORDS_HASHTAGS_INPUT = (941, 392)     # Шаг 8: поле ввода хэштегов
-COORDS_PUBLISH_BUTTON_2 = (925, 553)   # Шаг 10: финальная кнопка Publish
+COORDS_TITLE_INPUT = (625, 215)        # Шаг 3: ввод текста (title)
+COORDS_PUBLISH_BUTTON_1 = (1298, 115)  # Шаг 7: первая кнопка Publish
+COORDS_HASHTAGS_INPUT = (1074, 451)     # Шаг 8: поле ввода хэштегов
+COORDS_PUBLISH_BUTTON_2 = (1043, 573)   # Шаг 10: финальная кнопка Publish
 
 # Задержки (базовые значения, будут рандомизированы)
 WAIT_AFTER_OPEN_TAB = 10   # Шаг 2: ждём 10 секунд после открытия вкладки
