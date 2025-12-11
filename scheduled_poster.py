@@ -32,6 +32,7 @@ from medium_poster import (
 )
 from config import LOG_LEVEL, LOG_MODE
 from psycopg import sql
+from telegram_bot import notify_poster_started, notify_article_posted
 
 # Настройка логирования
 logging.basicConfig(
@@ -41,8 +42,8 @@ logging.basicConfig(
 
 # Константы
 GMT_MINUS_5 = pytz.timezone('America/New_York')  # GMT-5 (EST/EDT)
-POSTING_START_HOUR = 8
-POSTING_END_HOUR = 13
+POSTING_START_HOUR = 19
+POSTING_END_HOUR = 20
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
 
@@ -334,6 +335,12 @@ def main():
             logging.warning("Only %d articles with is_link='yes' available (need %d)", 
                           len(articles_with_link), ARTICLES_WITH_LINK_COUNT)
         
+        # Отправляем уведомление о запуске автопостера
+        try:
+            notify_poster_started(len(profiles), total_articles, selected_table)
+        except Exception as e:
+            logging.warning("Failed to send Telegram notification about poster start: %s", e)
+        
         # Распределяем статьи по профилям
         # Важно: все 5 профилей должны постить, без пересечений
         # 4 профиля постит is_link='no', 1 профиль постит is_link='yes'
@@ -434,6 +441,33 @@ def main():
                     else:
                         # В режиме DEBUG уже есть полное логирование из post_article_to_medium
                         logging.info("✓ Article ID %s posted successfully!", article_id)
+                    
+                    # Отправляем уведомление в Telegram о публикации статьи
+                    try:
+                        title = article.get('title', '') if isinstance(article, dict) else ''
+                        body = article.get('body', '') if isinstance(article, dict) else ''
+                        hashtags = [
+                            article.get('hashtag1', '').strip() if isinstance(article, dict) else '',
+                            article.get('hashtag2', '').strip() if isinstance(article, dict) else '',
+                            article.get('hashtag3', '').strip() if isinstance(article, dict) else '',
+                            article.get('hashtag4', '').strip() if isinstance(article, dict) else '',
+                            article.get('hashtag5', '').strip() if isinstance(article, dict) and article.get('hashtag5') else '',
+                        ]
+                        hashtags = [h for h in hashtags if h]
+                        has_link = article.get('is_link', 'no') == 'yes' if isinstance(article, dict) else False
+                        
+                        notify_article_posted(
+                            title=title,
+                            body=body,
+                            hashtags=hashtags,
+                            url=url,
+                            has_link=has_link,
+                            profile_no=profile_no,
+                            sequential_no=seq_no,
+                            profile_id=profile_id
+                        )
+                    except Exception as e:
+                        logging.warning("Failed to send Telegram notification about article: %s", e)
                     
                     # Минимизируем окно перед закрытием
                     minimize_profile_window(profile_no)
