@@ -331,6 +331,30 @@ def get_sequential_no(profile_no: int) -> Optional[int]:
     return PROFILE_SEQUENTIAL_MAPPING.get(profile_no)
 
 
+def get_profile_id_by_sequential_no(sequential_no: int) -> Optional[str]:
+    """
+    Получает profile_id по sequential_no (1-10).
+    Возвращает None если sequential_no не найден.
+    """
+    for profile_no, seq_no in PROFILE_SEQUENTIAL_MAPPING.items():
+        if seq_no == sequential_no:
+            profile_id = get_profile_id(profile_no)
+            if profile_id:
+                return profile_id
+    return None
+
+
+def get_profile_no_by_sequential_no(sequential_no: int) -> Optional[int]:
+    """
+    Получает profile_no по sequential_no (1-10).
+    Возвращает None если sequential_no не найден.
+    """
+    for profile_no, seq_no in PROFILE_SEQUENTIAL_MAPPING.items():
+        if seq_no == sequential_no:
+            return profile_no
+    return None
+
+
 def markdown_to_html(markdown_text: str) -> str:
     """
     Конвертирует Markdown в HTML-фрагмент.
@@ -543,8 +567,9 @@ def ensure_profile_ready(profile_no: int) -> bool:
             profile.driver.current_url
             logging.debug("Profile %d already has active driver", profile_no)
             return True
-        except:
-            logging.debug("Profile %d driver is dead, recreating...", profile_no)
+        except (Exception, AttributeError) as e:
+            # WebDriverException, NoSuchWindowException, или driver стал None
+            logging.debug("Profile %d driver is dead, recreating... (error: %s)", profile_no, e)
             profile.driver = None
     
     profile_status = check_ads_power_profile_status(profile.profile_id)
@@ -629,6 +654,10 @@ def ensure_profile_ready(profile_no: int) -> bool:
 
 
 def focus_profile_window(profile_no: int) -> bool:
+    """
+    Безопасно фокусирует и максимизирует окно профиля.
+    Если окно уже максимизировано, не вызывает ошибок.
+    """
     if profile_no not in profiles:
         logging.error("Profile %d not found in profiles dict", profile_no)
         return False
@@ -652,14 +681,26 @@ def focus_profile_window(profile_no: int) -> bool:
         
         win = windows[0]
         
+        # Если окно минимизировано - разворачиваем
         if win.isMinimized:
+            logging.debug("Window is minimized, restoring...")
             win.restore()
             time.sleep(0.3)
         
+        # Активируем окно
         win.activate()
         time.sleep(0.3)
-        win.maximize()
-        time.sleep(0.5)
+        
+        # Безопасно максимизируем: просто вызываем maximize()
+        # pygetwindow должен безопасно обработать это даже если окно уже максимизировано
+        try:
+            win.maximize()
+            time.sleep(0.5)
+            logging.debug("Window maximized (or was already maximized)")
+        except Exception as max_err:
+            # Если уже максимизировано или произошла другая ошибка, это нормально - продолжаем
+            logging.debug("Window may already be maximized or maximize failed: %s", max_err)
+            time.sleep(0.2)
         
         logging.info("✓ Profile %d window focused and maximized: %s", profile_no, win.title)
         return True
@@ -670,6 +711,89 @@ def focus_profile_window(profile_no: int) -> bool:
     except Exception as e:
         logging.error("Error focusing window for profile %d: %s", profile_no, e)
         return False
+
+
+def ensure_medium_tab_open(profile: Profile, profile_no: int) -> bool:
+    """
+    Убеждается, что вкладка Medium открыта и активна.
+    Если нет - открывает её. Обновляет profile.medium_window_handle.
+    
+    Возвращает True если успешно, False при ошибке.
+    """
+    if not profile.driver:
+        logging.error("Driver not available for profile %d", profile_no)
+        return False
+    
+    try:
+        # Переключаемся на нужное окно
+        target_handle = find_window_by_tag(profile)
+        if not target_handle:
+            logging.error("No window handles available!")
+            return False
+        
+        profile.driver.switch_to.window(target_handle)
+        
+        # Открываем Medium
+        logging.info("Navigating to Medium URL: %s", MEDIUM_NEW_STORY_URL)
+        profile.driver.get(MEDIUM_NEW_STORY_URL)
+        time.sleep(3)
+        
+        profile.medium_window_handle = profile.driver.current_window_handle
+        logging.info("✓ Medium URL opened, window handle saved: %s", profile.medium_window_handle)
+        
+        # Убеждаемся, что окно активно
+        focus_profile_window(profile_no)
+        time.sleep(0.5)
+        
+        # Проверяем URL
+        current_url = profile.driver.current_url
+        logging.info("Current URL: %s", current_url)
+        
+        if 'medium.com' not in current_url:
+            logging.warning("URL doesn't contain 'medium.com', retrying...")
+            profile.driver.get(MEDIUM_NEW_STORY_URL)
+            time.sleep(3)
+            profile.medium_window_handle = profile.driver.current_window_handle
+        
+        logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
+        wait_with_log(WAIT_AFTER_OPEN_TAB, "Page load wait", 10.0)
+        
+        return True
+        
+    except Exception as e:
+        logging.error("Failed to open Medium URL: %s", e, exc_info=True)
+        return False
+
+
+def find_window_by_tag(profile: Profile) -> Optional[str]:
+    """
+    Находит window handle окна с указанным window_tag.
+    Возвращает handle или None если не найдено.
+    """
+    if not profile.driver:
+        return None
+    
+    try:
+        all_handles = profile.driver.window_handles
+        if not all_handles:
+            return None
+        
+        for handle in all_handles:
+            try:
+                profile.driver.switch_to.window(handle)
+                title = profile.driver.title
+                if profile.window_tag in title:
+                    return handle
+            except (Exception, AttributeError) as e:
+                # WebDriverException, NoSuchWindowException, или окно закрылось
+                logging.debug("Could not get title for handle %s: %s", handle, e)
+                continue
+        
+        # Если окно с тегом не найдено, возвращаем первое доступное
+        return all_handles[0] if all_handles else None
+    except Exception as e:
+        logging.error("Error finding window by tag: %s", e)
+        return None
 
 
 def minimize_profile_window(profile_no: int) -> bool:
@@ -695,100 +819,124 @@ def minimize_profile_window(profile_no: int) -> bool:
             return True
         
         return False
-    except:
+    except ImportError:
+        logging.error("pygetwindow not available for minimizing window")
+        return False
+    except Exception as e:
+        logging.debug("Error minimizing window for profile %d: %s", profile_no, e)
         return False
 
 
-def open_ads_power_profile(profile_id: str) -> Optional[str]:
-    profile_no = get_profile_no(profile_id)
-    sequential_no = get_sequential_no(profile_no)
-    profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
-    logging.info("Opening/activating Ads Power profile: %s", profile_info)
+def open_and_maximize_profile(sequential_no: int) -> Optional[str]:
+    """
+    Открывает и максимизирует профиль по sequential_no (1-10).
+    Если профиль открыт - разворачивает и максимизирует.
+    Если закрыт - открывает через API, затем максимизирует.
+    После этого открывает страницу Medium.
     
+    Возвращает profile_id при успехе, None при ошибке.
+    """
+    logging.info("="*60)
+    logging.info("Opening profile with sequential_no: %d", sequential_no)
+    logging.info("="*60)
+    
+    # Получаем profile_id и profile_no по sequential_no
+    profile_id = get_profile_id_by_sequential_no(sequential_no)
+    if not profile_id:
+        logging.error("Profile with sequential_no %d not found", sequential_no)
+        return None
+    
+    profile_no = get_profile_no_by_sequential_no(sequential_no)
+    if not profile_no:
+        logging.error("Profile_no not found for sequential_no %d", sequential_no)
+        return None
+    
+    profile_info = f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
+    logging.info("Profile info: %s", profile_info)
+    
+    # Проверяем статус профиля через API
+    logging.info("Checking profile status via API...")
+    profile_status = check_ads_power_profile_status(profile_id)
+    
+    if not profile_status:
+        # Профиль закрыт - открываем через API
+        logging.info("Profile is closed, opening via API...")
+        endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
+        headers = {"Content-Type": "application/json"}
+        if ADS_POWER_API_KEY:
+            headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        
+        payload = {"profile_id": profile_id}
+        
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            if response.status_code != 200:
+                logging.error("Failed to start profile: HTTP %d", response.status_code)
+                return None
+            
+            data = response.json()
+            if data.get("code") != 0:
+                logging.error("Failed to start profile: %s", data.get("msg", "Unknown error"))
+                return None
+            
+            logging.info("✓ Profile started via API, waiting for initialization...")
+            time.sleep(5)  # Ждем инициализацию профиля
+            
+            # Проверяем статус еще раз
+            profile_status = check_ads_power_profile_status(profile_id)
+            if not profile_status:
+                logging.error("Profile still not active after start")
+                return None
+        except Exception as e:
+            logging.error("Error starting profile: %s", e)
+            return None
+    else:
+        # Профиль уже открыт
+        status = profile_status.get("status", "Unknown")
+        logging.info("Profile is already open (status: %s)", status)
+    
+    # Убеждаемся, что профиль готов (создаем/обновляем driver)
     if not ensure_profile_ready(profile_no):
         logging.error("Failed to ensure profile %d is ready", profile_no)
         return None
     
+    # Безопасно максимизируем окно
+    logging.info("Maximizing profile window...")
     if not focus_profile_window(profile_no):
-        logging.warning("Failed to focus window for profile %d, but continuing...", profile_no)
+        logging.warning("Failed to focus/maximize window, but continuing...")
     
-    logging.info("Opening Medium URL in active browser window via Selenium...")
-    try:
-        profile = profiles[profile_no]
-        if not profile.driver:
-            logging.error("Driver not available for profile %d", profile_no)
-            return None
-        
-        all_handles = profile.driver.window_handles
-        logging.debug("  Available window handles: %s", all_handles)
-        
-        if not all_handles:
-            logging.error("  No window handles available!")
-            return None
-        
-        try:
-            target_handle = None
-            for handle in all_handles:
-                profile.driver.switch_to.window(handle)
-                try:
-                    title = profile.driver.title
-                    if profile.window_tag in title:
-                        target_handle = handle
-                        break
-                except:
-                    pass
-            
-            if target_handle:
-                profile.driver.switch_to.window(target_handle)
-                logging.debug("  Switched to window with tag: %s", profile.window_tag)
-            else:
-                profile.driver.switch_to.window(all_handles[0])
-                logging.debug("  Switched to first available window")
-        except Exception as switch_err:
-            logging.warning("  Failed to switch window: %s, using current window", switch_err)
-        
-        logging.info("  Navigating to Medium URL: %s", MEDIUM_NEW_STORY_URL)
-        try:
-            profile.driver.get(MEDIUM_NEW_STORY_URL)
-            time.sleep(3)
-        except Exception as nav_err:
-            logging.error("  Failed to navigate to Medium URL: %s", nav_err)
-            return None
-        
-        profile.medium_window_handle = profile.driver.current_window_handle
-        logging.info("  Medium window handle saved: %s", profile.medium_window_handle)
-        
-        logging.info("  Activating browser window to make Medium tab visible...")
-        try:
-            focus_profile_window(profile_no)
-            time.sleep(0.5)
-            logging.info("  Browser window activated, Medium tab should be visible")
-        except Exception as e:
-            logging.warning("  Failed to activate window: %s, but continuing...", e)
-        
-        try:
-            current_url = profile.driver.current_url
-            logging.info("  Current URL: %s", current_url)
-            
-            if 'medium.com' not in current_url:
-                logging.warning("  URL doesn't contain 'medium.com', retrying...")
-                profile.driver.get(MEDIUM_NEW_STORY_URL)
-                time.sleep(3)
-                current_url = profile.driver.current_url
-                logging.info("  Current URL after retry: %s", current_url)
-                profile.medium_window_handle = profile.driver.current_window_handle
-        except Exception as url_err:
-            logging.warning("  Failed to get current URL: %s, but continuing...", url_err)
-        
-        logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
-        wait_with_log(WAIT_AFTER_OPEN_TAB, "Page load wait", 10.0)
-        
-        logging.info("✓ URL opened in AdsPower profile browser via Selenium, page loaded")
-    except Exception as e:
-        logging.error("Failed to open URL in AdsPower browser via Selenium: %s", e, exc_info=True)
+    # Открываем Medium URL через Selenium
+    logging.info("Opening Medium URL in browser...")
+    profile = profiles[profile_no]
+    if not ensure_medium_tab_open(profile, profile_no):
         return None
     
+    logging.info("="*60)
+    logging.info("✓ Profile ready: window maximized, Medium tab open")
+    logging.info("="*60)
+    
     return profile_id
+
+
+def open_ads_power_profile(profile_id: str) -> Optional[str]:
+    """
+    Открывает профиль по profile_id (для обратной совместимости).
+    Конвертирует profile_id в sequential_no и вызывает open_and_maximize_profile().
+    
+    Возвращает profile_id при успехе, None при ошибке.
+    """
+    profile_no = get_profile_no(profile_id)
+    if profile_no == 0:
+        logging.error("Profile ID %s not found in PROFILE_MAPPING", profile_id)
+        return None
+    
+    sequential_no = get_sequential_no(profile_no)
+    if not sequential_no:
+        logging.error("Profile No %d has no sequential_no mapping", profile_no)
+        return None
+    
+    # Используем основную функцию
+    return open_and_maximize_profile(sequential_no)
 
 
 def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
@@ -987,14 +1135,19 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             if profile.driver and profile.medium_window_handle:
                 try:
                     profile.driver.switch_to.window(profile.medium_window_handle)
-                except:
+                except (Exception, AttributeError) as e:
+                    # NoSuchWindowException или handle стал невалидным
+                    logging.debug("Window handle invalid, searching for Medium window: %s", e)
                     all_windows = profile.driver.window_handles
                     for window in all_windows:
-                        profile.driver.switch_to.window(window)
-                        current_url = profile.driver.current_url
-                        if 'medium.com' in current_url and '/@' in current_url:
-                            profile.medium_window_handle = window
-                            break
+                        try:
+                            profile.driver.switch_to.window(window)
+                            current_url = profile.driver.current_url
+                            if 'medium.com' in current_url and '/@' in current_url:
+                                profile.medium_window_handle = window
+                                break
+                        except (Exception, AttributeError):
+                            continue
                     else:
                         if all_windows:
                             profile.driver.switch_to.window(all_windows[-1])
@@ -1110,33 +1263,46 @@ def main():
             logging.info("Aborted by user")
             return
         
-        profile_index = 0
+        # Используем sequential_no от 1 до 10 (циклически)
+        sequential_index = 0
+        # Безопасно получаем максимальный sequential_no
+        if not PROFILE_SEQUENTIAL_MAPPING:
+            logging.error("PROFILE_SEQUENTIAL_MAPPING is empty! Cannot proceed.")
+            return
+        
+        max_sequential_no = max(PROFILE_SEQUENTIAL_MAPPING.values())
+        if max_sequential_no <= 0:
+            logging.error("Invalid max_sequential_no: %d. Must be > 0", max_sequential_no)
+            return
+        
         posted_count = 0
         failed_count = 0
         
         for article in unpublished_articles:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             
-            profile_id = PROFILE_IDS[profile_index % len(PROFILE_IDS)]
-            profile_no = get_profile_no(profile_id)
-            profile_index += 1
+            # Выбираем sequential_no циклически (1, 2, 3, ..., max_sequential_no, 1, 2, ...)
+            sequential_no = (sequential_index % max_sequential_no) + 1
+            sequential_index += 1
             
             logging.info("")
             logging.info("="*60)
-            sequential_no = get_sequential_no(profile_no)
-            profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
-            logging.info("Processing article ID %s with profile: %s", article_id, profile_info)
+            logging.info("Processing article ID %s with profile sequential_no: %d", article_id, sequential_no)
             logging.info("="*60)
             
-            result = open_ads_power_profile(profile_id)
-            if not result:
-                sequential_no = get_sequential_no(profile_no)
-                profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
-                logging.error("Failed to open profile: %s, skipping article ID %s", profile_info, article_id)
+            # Открываем и максимизируем профиль через новую функцию
+            profile_id = open_and_maximize_profile(sequential_no)
+            if not profile_id:
+                logging.error("Failed to open profile with sequential_no %d, skipping article ID %s", sequential_no, article_id)
                 failed_count += 1
                 continue
             
-            time.sleep(5)
+            profile_no = get_profile_no(profile_id)
+            profile_info = f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
+            logging.info("Profile ready: %s", profile_info)
+            
+            # Небольшая пауза перед началом работы с PyAutoGUI
+            time.sleep(2)
             
             try:
                 url = post_article_to_medium(article, profile_id)
@@ -1149,6 +1315,7 @@ def main():
                     failed_count += 1
                     logging.error("✗ Failed to post article ID %s", article_id)
                 
+                # Минимизируем окно после публикации
                 minimize_profile_window(profile_no)
                 
             finally:
