@@ -65,10 +65,10 @@ def notify_poster_started(profiles_count: int, articles_count: int, table_name: 
         True если успешно, False при ошибке
     """
     text = (
-        f"<b>Автопостер запущен</b>\n\n"
-        f"Таблица: {table_name}\n"
-        f"Профилей: {profiles_count}\n"
-        f"Статей: {articles_count}"
+        f"<b>Auto-poster started</b>\n\n"
+        f"Table: {table_name}\n"
+        f"Profiles: {profiles_count}\n"
+        f"Articles: {articles_count}"
     )
     return send_message(text)
 
@@ -105,18 +105,18 @@ def notify_article_posted(
     # Экранируем HTML-символы в тексте
     title_escaped = html.escape(title)
     body_escaped = html.escape(body_preview)
-    tags_escaped = html.escape(", ".join(hashtags) if hashtags else "нет")
+    tags_escaped = html.escape(", ".join(hashtags) if hashtags else "none")
     
     # Формируем информацию о ссылке
-    link_status = "да" if has_link else "нет"
+    link_status = "yes" if has_link else "no"
     
     text = (
-        f"<b>Статья опубликована</b>\n\n"
-        f"<b>Заголовок:</b> {title_escaped}\n\n"
-        f"<b>Текст (200 символов):</b>\n{body_escaped}\n\n"
-        f"<b>Хэштеги:</b> {tags_escaped}\n"
-        f"<b>Есть ссылка:</b> {link_status}\n"
-        f"<b>Профиль:</b> No {profile_no}, Seq {sequential_no}, ID {profile_id}\n"
+        f"<b>Article published</b>\n\n"
+        f"<b>Title:</b> {title_escaped}\n\n"
+        f"<b>Text (200 characters):</b>\n{body_escaped}\n\n"
+        f"<b>Hashtags:</b> {tags_escaped}\n"
+        f"<b>Has link:</b> {link_status}\n"
+        f"<b>Profile:</b> No {profile_no}, Seq {sequential_no}, ID {profile_id}\n"
         f"<b>URL:</b> {url}"
     )
     
