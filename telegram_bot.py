@@ -6,10 +6,8 @@ from typing import Optional, List
 import requests
 import html
 
-# ==================== КОНФИГУРАЦИЯ ====================
-# Вставьте токен вашего Telegram бота здесь
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"  # ID чата или канала для отправки сообщений
+# Импортируем конфигурацию
+from config_bot import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
