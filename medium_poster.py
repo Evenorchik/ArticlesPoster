@@ -238,18 +238,28 @@ def parse_id_selection(s: str) -> List[int]:
 def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[int]] = None) -> List[dict]:
     logging.debug("Getting articles from table: %s", table_name)
     
+    # Безопасно проверяем наличие колонки hashtag5
     logging.debug("Checking for hashtag5 column...")
-    check_col_query = sql.SQL("""
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name = %s AND column_name = 'hashtag5'
-    """)
-    
-    with pg_conn.cursor() as cur:
-        cur.execute(check_col_query, (table_name,))
-        has_hashtag5 = cur.fetchone() is not None
+    has_hashtag5 = False
+    try:
+        check_col_query = sql.SQL("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_schema = 'public' 
+            AND table_name = %s 
+            AND column_name = 'hashtag5'
+        """)
+        
+        with pg_conn.cursor() as cur:
+            cur.execute(check_col_query, (table_name,))
+            has_hashtag5 = cur.fetchone() is not None
         logging.info("Table has hashtag5 column: %s", has_hashtag5)
+    except Exception as e:
+        # Если проверка не удалась, предполагаем что колонки нет
+        logging.warning("Could not check for hashtag5 column (assuming it doesn't exist): %s", e)
+        has_hashtag5 = False
     
+    # Формируем список колонок в зависимости от наличия hashtag5
     if has_hashtag5:
         select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, hashtag5, url, profile_id"
     else:
@@ -282,15 +292,32 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
     
     try:
         with pg_conn.cursor() as cur:
+            # Логируем запрос для отладки
+            try:
+                query_str = query.as_string(pg_conn) if hasattr(query, 'as_string') else str(query)
+                logging.debug("Executing query: %s with params: %s", query_str, params)
+            except:
+                logging.debug("Executing query with params: %s", params)
+            
             cur.execute(query, params)
             articles = cur.fetchall()
             logging.info("Fetched %d article(s) from database", len(articles))
+            
             if articles:
                 logging.debug("Article IDs: %s", [a['id'] if isinstance(a, dict) else a[0] for a in articles[:10]])
+            elif article_ids:
+                # Если искали по ID, но ничего не нашли - это странно
+                logging.warning("No articles found for IDs: %s. They may not exist in table %s", article_ids, table_name)
+            
             return articles
     except Exception as e:
-        logging.error("Error fetching articles: %s", e)
-        logging.error("Query: %s", query.as_string(pg_conn) if hasattr(query, 'as_string') else str(query))
+        logging.error("Error fetching articles: %s", e, exc_info=True)
+        try:
+            query_str = query.as_string(pg_conn) if hasattr(query, 'as_string') else str(query)
+            logging.error("Failed query: %s", query_str)
+            logging.error("Query params: %s", params)
+        except:
+            logging.error("Could not format query string")
         raise
 
 
