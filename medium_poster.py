@@ -601,8 +601,13 @@ def ensure_profile_ready(profile_no: int) -> bool:
     
     profile_status = check_ads_power_profile_status(profile.profile_id)
     
-    if not profile_status:
-        logging.info("Profile %d (ID: %s) is not active, starting...", profile_no, profile.profile_id)
+    # Проверяем статус профиля - если он не активен, пытаемся запустить
+    status = None
+    if profile_status:
+        status = profile_status.get("status", "Unknown")
+    
+    if not profile_status or status != "Active":
+        logging.info("Profile %d (ID: %s) is not active (status: %s), starting...", profile_no, profile.profile_id, status)
         
         endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
         headers = {"Content-Type": "application/json"}
@@ -622,15 +627,31 @@ def ensure_profile_ready(profile_no: int) -> bool:
                 logging.error("Failed to start profile %d: %s", profile_no, data.get("msg", "Unknown error"))
                 return False
             
-            time.sleep(3)
+            # Ждем инициализацию профиля с несколькими попытками
+            max_retries = 5
+            retry_count = 0
+            while retry_count < max_retries:
+                time.sleep(3)
+                profile_status = check_ads_power_profile_status(profile.profile_id)
+                if profile_status:
+                    status = profile_status.get("status", "Unknown")
+                    if status == "Active":
+                        logging.info("Profile %d is now Active", profile_no)
+                        break
+                retry_count += 1
+                logging.debug("Waiting for profile %d to become Active (attempt %d/%d)...", profile_no, retry_count, max_retries)
             
-            profile_status = check_ads_power_profile_status(profile.profile_id)
-            if not profile_status:
-                logging.error("Profile %d still not active after start", profile_no)
+            if not profile_status or status != "Active":
+                logging.error("Profile %d still not active after start (status: %s)", profile_no, status)
                 return False
         except Exception as e:
             logging.error("Error starting profile %d: %s", profile_no, e)
             return False
+    
+    # Проверяем, что статус действительно Active перед получением selenium/webdriver
+    if status != "Active":
+        logging.error("Profile %d status is not Active (status: %s), cannot proceed", profile_no, status)
+        return False
     
     ws_data = profile_status.get("ws", {})
     selenium_address = ws_data.get("selenium", "")
@@ -885,9 +906,14 @@ def open_and_maximize_profile(sequential_no: int) -> Optional[str]:
     logging.info("Checking profile status via API...")
     profile_status = check_ads_power_profile_status(profile_id)
     
-    if not profile_status:
-        # Профиль закрыт - открываем через API
-        logging.info("Profile is closed, opening via API...")
+    # Проверяем статус профиля - если он не активен, пытаемся запустить
+    status = None
+    if profile_status:
+        status = profile_status.get("status", "Unknown")
+    
+    if not profile_status or status != "Active":
+        # Профиль закрыт или неактивен - открываем через API
+        logging.info("Profile is closed or inactive (status: %s), opening via API...", status)
         endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
         headers = {"Content-Type": "application/json"}
         if ADS_POWER_API_KEY:
@@ -907,20 +933,30 @@ def open_and_maximize_profile(sequential_no: int) -> Optional[str]:
                 return None
             
             logging.info("✓ Profile started via API, waiting for initialization...")
-            time.sleep(5)  # Ждем инициализацию профиля
             
-            # Проверяем статус еще раз
-            profile_status = check_ads_power_profile_status(profile_id)
-            if not profile_status:
-                logging.error("Profile still not active after start")
+            # Ждем инициализацию профиля с несколькими попытками
+            max_retries = 5
+            retry_count = 0
+            while retry_count < max_retries:
+                time.sleep(3)
+                profile_status = check_ads_power_profile_status(profile_id)
+                if profile_status:
+                    status = profile_status.get("status", "Unknown")
+                    if status == "Active":
+                        logging.info("Profile is now Active")
+                        break
+                retry_count += 1
+                logging.debug("Waiting for profile to become Active (attempt %d/%d)...", retry_count, max_retries)
+            
+            if not profile_status or status != "Active":
+                logging.error("Profile still not active after start (status: %s)", status)
                 return None
         except Exception as e:
             logging.error("Error starting profile: %s", e)
             return None
     else:
-        # Профиль уже открыт
-        status = profile_status.get("status", "Unknown")
-        logging.info("Profile is already open (status: %s)", status)
+        # Профиль уже открыт и активен
+        logging.info("Profile is already open and active (status: %s)", status)
     
     # Убеждаемся, что профиль готов (создаем/обновляем driver)
     if not ensure_profile_ready(profile_no):
