@@ -27,6 +27,8 @@ from medium_poster import (
     post_article_to_medium,
     update_article_url_and_profile,
     minimize_profile_window,
+    close_profile,
+    ensure_profile_id_column,
 )
 from config import LOG_LEVEL, LOG_MODE
 from psycopg import sql
@@ -298,6 +300,9 @@ def main():
         
         logging.info("Selected table: %s", selected_table)
         
+        # Убеждаемся, что колонка profile_id существует в таблице
+        ensure_profile_id_column(pg_conn, selected_table)
+        
         # Получаем профили для сегодня
         profiles = get_profiles_for_today()
         if not profiles:
@@ -429,17 +434,32 @@ def main():
                     else:
                         # В режиме DEBUG уже есть полное логирование из post_article_to_medium
                         logging.info("✓ Article ID %s posted successfully!", article_id)
+                    
+                    # Минимизируем окно перед закрытием
+                    minimize_profile_window(profile_no)
+                    time.sleep(1)
+                    
+                    # Закрываем профиль после успешного постинга и сохранения ссылки
+                    logging.info("Closing profile after successful post...")
+                    close_profile(profile_id)
+                    
+                    # Небольшая пауза после закрытия профиля
+                    time.sleep(2)
                 else:
                     failed_count += 1
                     logging.error("✗ Failed to post article ID %s", article_id)
-                
-                # Сворачиваем окно
-                minimize_profile_window(profile_no)
+                    
+                    # Сворачиваем окно даже при ошибке
+                    minimize_profile_window(profile_no)
+                    
+                    # Не закрываем профиль при ошибке, чтобы можно было проверить проблему
                 
             except Exception as e:
                 logging.error("Error posting article ID %s: %s", article_id, e, exc_info=True)
                 failed_count += 1
+                # Минимизируем окно при ошибке
                 minimize_profile_window(profile_no)
+                # Не закрываем профиль при ошибке
             
             # Пауза между статьями (если не последняя)
             current_article_id = article.get('id') if isinstance(article, dict) else article[0]

@@ -575,6 +575,52 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
         return None
 
 
+def close_profile(profile_id: str) -> bool:
+    """
+    Закрывает профиль Ads Power через API.
+    
+    Возвращает True при успехе, False при ошибке.
+    """
+    profile_no = get_profile_no(profile_id)
+    logging.info("Closing profile ID: %s (No: %s)", profile_id, profile_no)
+    
+    endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/stop"
+    headers = {"Content-Type": "application/json"}
+    if ADS_POWER_API_KEY:
+        headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+    
+    payload = {"profile_id": profile_id}
+    
+    try:
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+        if response.status_code != 200:
+            logging.error("Failed to close profile %d: HTTP %d", profile_no, response.status_code)
+            return False
+        
+        data = response.json()
+        if data.get("code") != 0:
+            logging.error("Failed to close profile %d: %s", profile_no, data.get("msg", "Unknown error"))
+            return False
+        
+        logging.info("✓ Profile %d (ID: %s) closed successfully", profile_no, profile_id)
+        
+        # Очищаем driver из словаря профилей
+        if profile_no in profiles:
+            profile = profiles[profile_no]
+            if profile.driver:
+                try:
+                    profile.driver.quit()
+                except Exception as e:
+                    logging.debug("Error quitting driver for profile %d: %s", profile_no, e)
+                profile.driver = None
+            profile.medium_window_handle = None
+        
+        return True
+    except Exception as e:
+        logging.error("Error closing profile %d: %s", profile_no, e)
+        return False
+
+
 def ensure_profile_ready(profile_no: int) -> bool:
     if not SELENIUM_AVAILABLE:
         logging.error("Selenium not available! Install with: pip install selenium")
@@ -955,23 +1001,25 @@ def open_and_maximize_profile(sequential_no: int) -> Optional[str]:
             logging.error("Error starting profile: %s", e)
             return None
     else:
-        # Профиль уже открыт и активен
-        logging.info("Profile is already open and active (status: %s)", status)
+        # Профиль уже открыт и активен - просто переключаемся на него
+        logging.info("Profile is already open and active (status: %s), switching to it...", status)
     
     # Убеждаемся, что профиль готов (создаем/обновляем driver)
+    # Если профиль уже был открыт, ensure_profile_ready просто переиспользует существующий driver
     if not ensure_profile_ready(profile_no):
         logging.error("Failed to ensure profile %d is ready", profile_no)
         return None
     
-    # Безопасно максимизируем окно
+    # Безопасно максимизируем окно (работает и для уже открытых профилей)
     logging.info("Maximizing profile window...")
     if not focus_profile_window(profile_no):
         logging.warning("Failed to focus/maximize window, but continuing...")
     
-    # Открываем Medium URL через Selenium
+    # Открываем Medium URL через Selenium (или переключаемся на существующую вкладку)
     logging.info("Opening Medium URL in browser...")
     profile = profiles[profile_no]
     if not ensure_medium_tab_open(profile, profile_no):
+        logging.error("Failed to open Medium tab for profile %d", profile_no)
         return None
     
     logging.info("="*60)
@@ -1371,19 +1419,38 @@ def main():
                 url = post_article_to_medium(article, profile_id)
                 
                 if url:
+                    # Сохраняем ссылку в базу данных
                     update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                     posted_count += 1
                     logging.info("✓ Article ID %s posted successfully!", article_id)
+                    
+                    # Минимизируем окно перед закрытием
+                    minimize_profile_window(profile_no)
+                    time.sleep(1)
+                    
+                    # Закрываем профиль после успешного постинга и сохранения ссылки
+                    logging.info("Closing profile after successful post...")
+                    close_profile(profile_id)
+                    
+                    # Небольшая пауза после закрытия профиля
+                    time.sleep(2)
                 else:
                     failed_count += 1
                     logging.error("✗ Failed to post article ID %s", article_id)
+                    
+                    # Минимизируем окно даже при ошибке
+                    minimize_profile_window(profile_no)
+                    
+                    # Не закрываем профиль при ошибке, чтобы можно было проверить проблему
                 
-                # Минимизируем окно после публикации
+            except Exception as e:
+                logging.error("Error during posting process: %s", e, exc_info=True)
+                failed_count += 1
+                # Минимизируем окно при ошибке
                 minimize_profile_window(profile_no)
-                
-            finally:
-                pass
+                # Не закрываем профиль при ошибке
             
+            # Пауза перед следующим профилем (если это не последняя статья)
             if article != unpublished_articles[-1]:
                 pause_time = random_delay(5.0, 10.0)
                 logging.info("Waiting %.2f seconds before next article...", pause_time)
