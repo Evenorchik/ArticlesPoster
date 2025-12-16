@@ -68,6 +68,7 @@ def publish_article(
     logging.info("STEP 1.1: Reloading the page")
     try:
         ui.sleep(2)
+        ui.click(*coords.PUBLISH_BUTTON_1)
         ui.press('f5')
         logging.info("Reloaded")
         ui.sleep(2)
