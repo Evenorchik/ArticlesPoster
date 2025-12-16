@@ -12,7 +12,6 @@ import pyperclip
 import re
 from typing import Optional, List, Dict
 from dataclasses import dataclass, field
-from click_debug_screenshots import capture_click_screenshot
 
 # Markdown
 try:
@@ -91,10 +90,11 @@ PROFILE_SEQUENTIAL_MAPPING = {
 PROFILE_IDS = list(PROFILE_MAPPING.keys())
 
 # Координаты для кликов (из алгоритма пользователя)
-COORDS_TITLE_INPUT = (633, 214)        # Шаг 3: ввод текста (title)
+COORDS_TITLE_INPUT = (625, 215)        # Шаг 3: ввод текста (title)
 COORDS_PUBLISH_BUTTON_1 = (1301, 118)  # Шаг 7: первая кнопка Publish
-COORDS_HASHTAGS_INPUT = (1037, 440)     # Шаг 8: поле ввода хэштегов
-COORDS_PUBLISH_BUTTON_2 = (1051, 602)   # Шаг 10: финальная кнопка Publish
+COORDS_HASHTAGS_INPUT = (1056, 451)     # Шаг 8: поле ввода хэштегов
+COORDS_PUBLISH_BUTTON_2 = (1053, 570)   # Шаг 10: финальная кнопка Publish
+COORDS_PUBLISH_BUTTON_2_ALT = (1053, 601) 
 
 # Задержки (базовые значения, будут рандомизированы)
 WAIT_AFTER_OPEN_TAB = 15   # Шаг 2: ждём 10 секунд после открытия вкладки
@@ -602,66 +602,58 @@ def _ensure_tag_tab(profile: 'Profile') -> bool:
     - pygetwindow ищет окно по заголовку активной вкладки. Medium часто меняет title, поэтому держим стабильный tag.
     - Для фокуса окна можно временно активировать tag-вкладку, сфокусировать окно, и вернуть Medium.
     """
-    """
-    Создаёт/восстанавливает «tag tab» БЕЗ открытия новых вкладок через Selenium.
-
-    Почему так:
-    - AdsPower+Selenium иногда ломается на `switch_to.new_window()` (no such window).
-    - На некоторых профилях/расширениях `window.open()` заблокирован (LavaMoat scuttling).
-
-    Поэтому мы:
-    1) берём любую уже существующую вкладку,
-    2) переводим её на about:blank,
-    3) ставим стабильный document.title = window_tag,
-    4) сохраняем handle как tag_window_handle.
-    """
     if not getattr(profile, "driver", None):
         return False
 
     driver = profile.driver
     try:
-        handles = list(driver.window_handles or [])
-        if not handles:
+        handles = driver.window_handles or []
+
+        # Если tag handle уже известен и жив
+        if profile.tag_window_handle and profile.tag_window_handle in handles:
+            _safe_switch_to(driver, profile.tag_window_handle)
+            try:
+                driver.get("about:blank")
+            except Exception:
+                pass
+            try:
+                driver.execute_script("document.title = arguments[0];", profile.window_tag)
+            except Exception:
+                pass
+            return True
+
+        # Создаём НОВУЮ вкладку (не ломаем существующие вкладки профиля)
+        created = False
+        try:
+            # Selenium 4+
+            driver.switch_to.new_window("tab")
+            created = True
+        except Exception:
+            try:
+                driver.execute_script("window.open('about:blank','_blank');")
+                created = True
+            except Exception:
+                created = False
+
+        if not created:
             return False
 
-        def _try_make_tag(handle: str) -> bool:
-            try:
-                if not _safe_switch_to(driver, handle):
-                    return False
-                # Важно: не выполняем JS на chrome-extension://... без навигации.
-                try:
-                    driver.get("about:blank")
-                except Exception:
-                    return False
-                # about:blank управляем — можно задать title
-                try:
-                    driver.execute_script("document.title = arguments[0];", profile.window_tag)
-                except Exception:
-                    return False
-                profile.tag_window_handle = driver.current_window_handle
-                return True
-            except Exception:
-                return False
+        time.sleep(0.2)
+        handles = driver.window_handles or []
+        if handles:
+            _safe_switch_to(driver, handles[-1])
 
-        # 1) Если tag handle уже известен и жив — просто обновим title
-        if profile.tag_window_handle and profile.tag_window_handle in handles:
-            if _try_make_tag(profile.tag_window_handle):
-                return True
-            profile.tag_window_handle = None
-
-        # 2) Пробуем любую вкладку, кроме Medium (если известна)
-        for h in handles:
-            if profile.medium_window_handle and h == profile.medium_window_handle:
-                continue
-            if _try_make_tag(h):
-                return True
-
-        # 3) На крайний случай — текущую вкладку
         try:
-            current = driver.current_window_handle
+            driver.get("about:blank")
         except Exception:
-            current = handles[0]
-        return _try_make_tag(current)
+            pass
+        try:
+            driver.execute_script("document.title = arguments[0];", profile.window_tag)
+        except Exception:
+            pass
+
+        profile.tag_window_handle = driver.current_window_handle
+        return True
 
     except Exception:
         return False
@@ -795,8 +787,11 @@ def ensure_profile_ready(profile_no: int) -> bool:
         service = Service(webdriver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
 
-        # Важный нюанс: remote debug-окна AdsPower иногда не поддерживают команду maximize_window
-        # (может давать 500 / "Browser window not found"). Максимизацию делаем только через pygetwindow.
+        # Может фейлиться/не иметь эффекта — реальную максимизацию делаем через pygetwindow.
+        try:
+            driver.maximize_window()
+        except Exception:
+            pass
 
         profile.driver = driver
 
@@ -906,12 +901,14 @@ def _wait_document_ready(driver, timeout_s: int = 30) -> bool:
 
 
 def ensure_medium_tab_open(profile: Profile, profile_no: int) -> bool:
-    """Гарантирует активную вкладку Medium (new-story) так, чтобы PyAutoGUI мог работать.
+    """
+    Убеждается, что:
+    1) вкладка Medium существует (или создаётся),
+    2) она открыта на MEDIUM_NEW_STORY_URL,
+    3) В КОНЦЕ именно эта вкладка активна на экране (чтобы PyAutoGUI работал стабильно).
 
-    Важно:
-    - НЕ используем `driver.switch_to.new_window()` и `window.open()` — в AdsPower это
-      периодически падает (no such window) и/или блокируется расширениями (LavaMoat).
-    - Открываем новую вкладку через PyAutoGUI (Ctrl+T) уже в сфокусированном окне.
+    Ключевой момент: для надёжного фокуса окна используем tag-tab (стабильный title),
+    потом возвращаемся на Medium-tab.
     """
     if not profile.driver:
         logging.error("Driver not available for profile %d", profile_no)
@@ -920,76 +917,45 @@ def ensure_medium_tab_open(profile: Profile, profile_no: int) -> bool:
     driver = profile.driver
 
     try:
-        # 1) Стабильный title для поиска окна через pygetwindow
+        # 0) Гарантируем tag tab
         _ensure_tag_tab(profile)
 
-        # 2) Активируем tag-tab (чтобы заголовок окна точно был window_tag) и фокусируем окно
-        if profile.tag_window_handle:
-            _safe_switch_to(driver, profile.tag_window_handle)
-            time.sleep(0.2)
+        handles = driver.window_handles or []
 
-        if not focus_profile_window(profile_no):
-            logging.warning("Failed to focus/maximize window (continuing anyway)...")
+        # 1) Если уже есть сохранённый medium_window_handle — пробуем его
+        if profile.medium_window_handle and profile.medium_window_handle in handles:
+            if not _safe_switch_to(driver, profile.medium_window_handle):
+                profile.medium_window_handle = None
 
-        time.sleep(0.2)
-
-        # 3) Открываем новую вкладку Medium ЧЕРЕЗ PyAutoGUI
-        handles_before = set(driver.window_handles or [])
-
-        try:
-            # Новая вкладка становится активной
-            pyautogui.hotkey('ctrl', 't')
-            time.sleep(0.35)
-
-            # Вставляем URL через буфер (быстрее и надёжнее)
-            pyperclip.copy(MEDIUM_NEW_STORY_URL)
-            time.sleep(0.1)
-            pyautogui.hotkey('ctrl', 'l')
-            time.sleep(0.05)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.05)
-            pyautogui.press('enter')
-        except Exception as e:
-            logging.error("Failed to open Medium tab via PyAutoGUI: %s", e)
-            return False
-
-        # 4) Ждём, пока Selenium увидит новую вкладку (handle)
-        new_handle = None
-        deadline = time.time() + 8.0
-        while time.time() < deadline:
-            handles_now = list(driver.window_handles or [])
-            diff = [h for h in handles_now if h not in handles_before]
-            if diff:
-                new_handle = diff[-1]
-                break
-            time.sleep(0.2)
-
-        # 5) Если handle не появился, попробуем найти вкладку Medium по URL
-        if not new_handle:
+        # 2) Если нет — ищем существующую вкладку medium.com
+        if not profile.medium_window_handle:
             found = _find_existing_medium_tab(profile)
             if found:
-                new_handle = found
+                profile.medium_window_handle = found
+                _safe_switch_to(driver, found)
 
-        if new_handle:
-            _safe_switch_to(driver, new_handle)
-            profile.medium_window_handle = new_handle
-        else:
-            # Фоллбек: используем текущую вкладку драйвера
+        # 3) Если всё ещё нет — открываем новую вкладку
+        if not profile.medium_window_handle:
             try:
-                profile.medium_window_handle = driver.current_window_handle
+                driver.switch_to.new_window("tab")
             except Exception:
-                pass
+                driver.execute_script("window.open('about:blank','_blank');")
+                time.sleep(0.2)
+                handles = driver.window_handles or []
+                if handles:
+                    _safe_switch_to(driver, handles[-1])
+            profile.medium_window_handle = driver.current_window_handle
 
-        # 6) Усиливаем: навигация Selenium (если PyAutoGUI открыло что-то не то)
+        # 4) Навигация на new-story
         try:
             driver.get(MEDIUM_NEW_STORY_URL)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug("driver.get(MEDIUM_NEW_STORY_URL) failed (continuing): %s", e)
 
         _wait_document_ready(driver, timeout_s=30)
-        time.sleep(0.25)
+        time.sleep(0.3)
 
-        # 7) Подмешаем tag в title (иногда помогает, но не полагаемся)
+        # (необязательно) Добавим tag в title medium вкладки — иногда помогает, но не полагаемся на это.
         try:
             driver.execute_script(
                 "document.title = arguments[0] + ' | ' + (document.title || 'Medium');",
@@ -998,17 +964,31 @@ def ensure_medium_tab_open(profile: Profile, profile_no: int) -> bool:
         except Exception:
             pass
 
-        # В этот момент активная вкладка на экране — Medium (мы её только что открывали).
-        logging.info(
-            "✓ Medium tab ready & active. Handle=%s URL=%s",
-            getattr(profile, 'medium_window_handle', None),
-            getattr(driver, 'current_url', '')
-        )
+        # 5) Фокусируем окно через tag-tab
+        if profile.tag_window_handle:
+            _safe_switch_to(driver, profile.tag_window_handle)
+            try:
+                driver.execute_script("document.title = arguments[0];", profile.window_tag)
+            except Exception:
+                pass
+            time.sleep(0.2)
 
-        logging.info(
-            "Waiting %.0f seconds for page to stabilize before starting PyAutoGUI cycle...",
-            WAIT_AFTER_OPEN_TAB
-        )
+        focus_profile_window(profile_no)
+        time.sleep(0.25)
+
+        # 6) Возвращаем активной вкладкой Medium (это важно для PyAutoGUI)
+        if profile.medium_window_handle:
+            _safe_switch_to(driver, profile.medium_window_handle)
+            try:
+                driver.execute_script("window.focus();")
+            except Exception:
+                pass
+            time.sleep(0.25)
+
+        profile.medium_window_handle = driver.current_window_handle
+        logging.info("✓ Medium tab ready & active. Handle=%s URL=%s", profile.medium_window_handle, driver.current_url)
+
+        logging.info("Waiting %.0f seconds for page to stabilize before starting PyAutoGUI cycle...", WAIT_AFTER_OPEN_TAB)
         wait_with_log(WAIT_AFTER_OPEN_TAB, "Page load wait", 10.0)
         return True
 
@@ -1064,27 +1044,12 @@ def minimize_profile_window(profile_no: int) -> bool:
     try:
         import pygetwindow as gw
 
-        def _find_windows():
-            wins = gw.getWindowsWithTitle(profile.window_tag)
-            if wins:
-                return wins
-            for w in gw.getAllWindows():
-                if profile.window_tag in (w.title or ""):
-                    return [w]
-            return []
-
-        windows = _find_windows()
-
-        # Если Medium активен и title не содержит tag — временно активируем tag-tab
-        if not windows and getattr(profile, "driver", None):
-            try:
-                _ensure_tag_tab(profile)
-                if profile.tag_window_handle:
-                    _safe_switch_to(profile.driver, profile.tag_window_handle)
-                    time.sleep(0.2)
-                windows = _find_windows()
-            except Exception:
-                windows = _find_windows()
+        windows = gw.getWindowsWithTitle(profile.window_tag)
+        if not windows:
+            for win in gw.getAllWindows():
+                if profile.window_tag in (win.title or ""):
+                    windows = [win]
+                    break
 
         if windows:
             windows[0].minimize()
@@ -1234,7 +1199,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             time.sleep(2)
             pyautogui.press('f5')
             logging.info("Reloaded")
-            time.sleep(2)
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
@@ -1242,14 +1206,8 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("STEP 2: Clicking on title input field...")
         logging.info("  Coordinates: %s", COORDS_TITLE_INPUT)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_TITLE_INPUT, label="STEP 2: title click")
-            time.sleep(2)
-            pyautogui.click(*COORDS_TITLE_INPUT)
-            time.sleep(1)
             pyautogui.click(*COORDS_TITLE_INPUT)
             logging.info("  ✓ Clicked successfully")
-            time.sleep(1)
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
@@ -1260,7 +1218,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  Title length: %d characters", len(title))
         try:
             pyperclip.copy(title)
-            time.sleep(1)
+            time.sleep(0.2)
             pyautogui.hotkey('ctrl', 'v')
             logging.info("  ✓ Title pasted successfully")
         except Exception as e:
@@ -1305,11 +1263,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  Waiting 5 seconds before clicking Publish...")
         time.sleep(5)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_PUBLISH_BUTTON_1, label="STEP 6: publish 1 click")
-            time.sleep(2)
             pyautogui.click(*COORDS_PUBLISH_BUTTON_1)
-            time.sleep(1)
             logging.info("  ✓ Clicked successfully")
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
@@ -1320,9 +1274,6 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("STEP 7: Clicking on hashtags input field...")
         logging.info("  Coordinates: %s", COORDS_HASHTAGS_INPUT)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_HASHTAGS_INPUT, label="STEP 7: hash click")
-            time.sleep(2)
             pyautogui.click(*COORDS_HASHTAGS_INPUT)
             time.sleep(1)
             pyautogui.click(*COORDS_HASHTAGS_INPUT)
@@ -1361,13 +1312,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         logging.info("  Waiting 3 seconds before clicking final Publish...")
         time.sleep(3)
         try:
-            capture_click_screenshot(COORDS_PUBLISH_BUTTON_2, label="STEP 9: publish 2 click")
-            time.sleep(2)
             pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
-            time.sleep(1)
             logging.info("  ✓ First click successful")
             time.sleep(1)
-            pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
+            pyautogui.click(*COORDS_PUBLISH_BUTTON_2_ALT)
             logging.info("  ✓ Second click successful")
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
@@ -1595,3 +1543,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

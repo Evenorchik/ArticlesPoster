@@ -52,24 +52,33 @@ def send_message(text: str) -> bool:
         return False
 
 
-def notify_poster_started(profiles_count: int, articles_count: int, table_name: str) -> bool:
+def notify_poster_started(table_name: str, article_assignments: List) -> bool:
     """
-    Отправляет уведомление о запуске автопостера.
+    Отправляет уведомление о запуске автопостера с расписанием постинга.
     
     Args:
-        profiles_count: Количество профилей для постинга
-        articles_count: Количество статей для постинга
         table_name: Название таблицы
+        article_assignments: Список кортежей (profile_id, profile_no, seq_no, posting_time, article)
         
     Returns:
         True если успешно, False при ошибке
     """
-    text = (
-        f"<b>Auto-poster started</b>\n\n"
-        f"Table: {table_name}\n"
-        f"Profiles: {profiles_count}\n"
-        f"Articles: {articles_count}"
-    )
+    from datetime import datetime
+    import pytz
+    
+    GMT_MINUS_5 = pytz.timezone('America/New_York')
+    
+    text = f"<b>Auto-poster started</b>\n\n"
+    text += f"Table: {table_name}\n"
+    text += f"Articles: {len(article_assignments)}\n\n"
+    text += f"<b>Posting schedule:</b>\n"
+    
+    for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
+        article_topic = article.get('topic', 'N/A')[:40] if isinstance(article, dict) else 'N/A'
+        time_str = posting_time.strftime("%H:%M")
+        text += f"Profile Seq:{seq_no} (No:{profile_no}, ID:{profile_id}) → {time_str} GMT-5\n"
+        text += f"Article: {article_topic}\n\n"
+    
     return send_message(text)
 
 

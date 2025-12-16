@@ -1,0 +1,93 @@
+# Конфигурационные файлы с секретными данными
+config.py
+config_bot.py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Базы данных
+*.db
+*.sqlite
+*.sqlite3
+articles.db
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Скриншоты и отладочные файлы
+screenshots/
+debug_*.png
+click_debug_*.png
+
+# Копии файлов
+* — копия.py
+* — копия (2).py
+* — копия (3).py
+
+# Окружение
+.env
+.env.local
+.env.*.local
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Текстовые файлы с данными (если содержат чувствительную информацию)
+*.txt
+!requirements.txt
+!keywords.txt
+

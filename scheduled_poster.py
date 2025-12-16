@@ -42,8 +42,13 @@ logging.basicConfig(
 
 # Константы
 GMT_MINUS_5 = pytz.timezone('America/New_York')  # GMT-5 (EST/EDT)
-POSTING_START_HOUR = 19
-POSTING_END_HOUR = 20
+<<<<<<< HEAD
+POSTING_START_HOUR = 00.1   # 19:30 (19 + 30/60 = 19.5)
+POSTING_END_HOUR = 02.0   # 20:20 (20 + 20/60 = 20.333...)
+=======
+POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
+POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
+>>>>>>> d48d2828e08feb87b16238a540b3a9a9fb11a464
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
 
@@ -184,9 +189,10 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
         posting_time = None
         
         for attempt in range(max_attempts):
-            # Генерируем случайное время между 8 и 13 часами
-            hour = random.randint(POSTING_START_HOUR, POSTING_END_HOUR - 1)
-            minute = random.randint(0, 59)
+            # Генерируем случайное время между POSTING_START_HOUR и POSTING_END_HOUR
+            random_hour = random.uniform(POSTING_START_HOUR, POSTING_END_HOUR)
+            hour = int(random_hour)  # Целая часть - часы
+            minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
             
             candidate_time = GMT_MINUS_5.localize(
                 datetime.combine(today, datetime.min.time().replace(hour=hour, minute=minute))
@@ -212,8 +218,9 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
                 posting_time = last_time + timedelta(minutes=10)
             else:
                 # Первый профиль - случайное время
-                hour = random.randint(POSTING_START_HOUR, POSTING_END_HOUR - 1)
-                minute = random.randint(0, 59)
+                random_hour = random.uniform(POSTING_START_HOUR, POSTING_END_HOUR)
+                hour = int(random_hour)  # Целая часть - часы
+                minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
                 posting_time = GMT_MINUS_5.localize(
                     datetime.combine(today, datetime.min.time().replace(hour=hour, minute=minute))
                 )
@@ -335,12 +342,6 @@ def main():
             logging.warning("Only %d articles with is_link='yes' available (need %d)", 
                           len(articles_with_link), ARTICLES_WITH_LINK_COUNT)
         
-        # Отправляем уведомление о запуске автопостера
-        try:
-            notify_poster_started(len(profiles), total_articles, selected_table)
-        except Exception as e:
-            logging.warning("Failed to send Telegram notification about poster start: %s", e)
-        
         # Распределяем статьи по профилям
         # Важно: все 5 профилей должны постить, без пересечений
         # 4 профиля постит is_link='no', 1 профиль постит is_link='yes'
@@ -398,6 +399,12 @@ def main():
         if response == 'q':
             logging.info("Aborted by user")
             return
+        
+        # Отправляем уведомление о запуске автопостера после подтверждения
+        try:
+            notify_poster_started(selected_table, article_assignments)
+        except Exception as e:
+            logging.warning("Failed to send Telegram notification about poster start: %s", e)
         
         # Выполняем постинг по расписанию
         posted_count = 0

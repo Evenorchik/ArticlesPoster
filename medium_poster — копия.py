@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Скрипт для автоматического постинга статей на Medium через PyAutoGUI и Ads Power.
 Читает статьи из PostgreSQL (таблица refined_articles_*) и публикует их на Medium.
@@ -12,7 +11,6 @@ import pyperclip
 import re
 from typing import Optional, List, Dict
 from dataclasses import dataclass, field
-from click_debug_screenshots import capture_click_screenshot
 
 # Markdown
 try:
@@ -91,9 +89,9 @@ PROFILE_SEQUENTIAL_MAPPING = {
 PROFILE_IDS = list(PROFILE_MAPPING.keys())
 
 # Координаты для кликов (из алгоритма пользователя)
-COORDS_TITLE_INPUT = (633, 214)        # Шаг 3: ввод текста (title)
+COORDS_TITLE_INPUT = (625, 215)        # Шаг 3: ввод текста (title)
 COORDS_PUBLISH_BUTTON_1 = (1301, 118)  # Шаг 7: первая кнопка Publish
-COORDS_HASHTAGS_INPUT = (1037, 440)     # Шаг 8: поле ввода хэштегов
+COORDS_HASHTAGS_INPUT = (1052, 418)     # Шаг 8: поле ввода хэштегов
 COORDS_PUBLISH_BUTTON_2 = (1051, 602)   # Шаг 10: финальная кнопка Publish
 
 # Задержки (базовые значения, будут рандомизированы)
@@ -122,8 +120,7 @@ class Profile:
     window_tag: str = field(init=False)
     medium_window_handle: Optional[str] = None  # Handle вкладки с Medium
     sequential_no: int = field(init=False)      # Последовательный номер (1-10)
-    tag_window_handle: Optional[str] = None     # Handle вкладки-ярлыка (about:blank с window_tag)
-
+    
     def __post_init__(self):
         self.window_tag = f"ADS_PROFILE_{self.profile_no}"
         self.sequential_no = get_sequential_no(self.profile_no) or 0
@@ -174,7 +171,7 @@ def get_refined_articles_tables(pg_conn) -> List[str]:
         AND table_name LIKE 'refined_articles_%'
         ORDER BY table_name
     """)
-
+    
     try:
         with pg_conn.cursor() as cur:
             cur.execute(query)
@@ -193,18 +190,18 @@ def ensure_profile_id_column(pg_conn, table_name: str) -> None:
         FROM information_schema.columns 
         WHERE table_name = %s AND column_name = 'profile_id'
     """)
-
+    
     with pg_conn.cursor() as cur:
         cur.execute(check_query, (table_name,))
         has_column = cur.fetchone() is not None
-
+    
     if not has_column:
         logging.info("Adding profile_id column to table %s...", table_name)
         alter_query = sql.SQL("""
             ALTER TABLE {table}
             ADD COLUMN profile_id INTEGER
         """).format(table=sql.Identifier(table_name))
-
+        
         try:
             with pg_conn.cursor() as cur:
                 cur.execute(alter_query)
@@ -221,7 +218,7 @@ def ensure_profile_id_column(pg_conn, table_name: str) -> None:
 def parse_id_selection(s: str) -> List[int]:
     ids = []
     parts = s.replace(' ', '').split(',')
-
+    
     for part in parts:
         if '-' in part:
             try:
@@ -234,13 +231,13 @@ def parse_id_selection(s: str) -> List[int]:
                 ids.append(int(part))
             except ValueError:
                 logging.warning("Invalid ID format: %s", part)
-
+    
     return sorted(list(dict.fromkeys(ids)))
 
 
 def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[int]] = None) -> List[dict]:
     logging.debug("Getting articles from table: %s", table_name)
-
+    
     # Безопасно проверяем наличие колонки hashtag5
     logging.debug("Checking for hashtag5 column...")
     has_hashtag5 = False
@@ -252,7 +249,7 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
             AND table_name = %s 
             AND column_name = 'hashtag5'
         """)
-
+        
         with pg_conn.cursor() as cur:
             cur.execute(check_col_query, (table_name,))
             has_hashtag5 = cur.fetchone() is not None
@@ -261,13 +258,13 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
         # Если проверка не удалась, предполагаем что колонки нет
         logging.warning("Could not check for hashtag5 column (assuming it doesn't exist): %s", e)
         has_hashtag5 = False
-
+    
     # Формируем список колонок в зависимости от наличия hashtag5
     if has_hashtag5:
         select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, hashtag5, url, profile_id"
     else:
         select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, url, profile_id"
-
+    
     if article_ids:
         logging.info("Fetching articles by IDs: %s", article_ids)
         query = sql.SQL("""
@@ -292,25 +289,26 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
             table=sql.Identifier(table_name)
         )
         params = ()
-
+    
     try:
         with pg_conn.cursor() as cur:
             # Логируем запрос для отладки
             try:
                 query_str = query.as_string(pg_conn) if hasattr(query, 'as_string') else str(query)
                 logging.debug("Executing query: %s with params: %s", query_str, params)
-            except Exception:
+            except:
                 logging.debug("Executing query with params: %s", params)
-
+            
             cur.execute(query, params)
             articles = cur.fetchall()
             logging.info("Fetched %d article(s) from database", len(articles))
-
+            
             if articles:
                 logging.debug("Article IDs: %s", [a['id'] if isinstance(a, dict) else a[0] for a in articles[:10]])
             elif article_ids:
+                # Если искали по ID, но ничего не нашли - это странно
                 logging.warning("No articles found for IDs: %s. They may not exist in table %s", article_ids, table_name)
-
+            
             return articles
     except Exception as e:
         logging.error("Error fetching articles: %s", e, exc_info=True)
@@ -318,7 +316,7 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
             query_str = query.as_string(pg_conn) if hasattr(query, 'as_string') else str(query)
             logging.error("Failed query: %s", query_str)
             logging.error("Query params: %s", params)
-        except Exception:
+        except:
             logging.error("Could not format query string")
         raise
 
@@ -330,7 +328,7 @@ def update_article_url_and_profile(pg_conn, table_name: str, article_id: int, ur
         SET url = %s, profile_id = %s
         WHERE id = %s
     """).format(table=sql.Identifier(table_name))
-
+    
     try:
         with pg_conn.cursor() as cur:
             cur.execute(query, (url, profile_id, article_id))
@@ -361,6 +359,10 @@ def get_sequential_no(profile_no: int) -> Optional[int]:
 
 
 def get_profile_id_by_sequential_no(sequential_no: int) -> Optional[str]:
+    """
+    Получает profile_id по sequential_no (1-10).
+    Возвращает None если sequential_no не найден.
+    """
     for profile_no, seq_no in PROFILE_SEQUENTIAL_MAPPING.items():
         if seq_no == sequential_no:
             profile_id = get_profile_id(profile_no)
@@ -370,6 +372,10 @@ def get_profile_id_by_sequential_no(sequential_no: int) -> Optional[str]:
 
 
 def get_profile_no_by_sequential_no(sequential_no: int) -> Optional[int]:
+    """
+    Получает profile_no по sequential_no (1-10).
+    Возвращает None если sequential_no не найден.
+    """
     for profile_no, seq_no in PROFILE_SEQUENTIAL_MAPPING.items():
         if seq_no == sequential_no:
             return profile_no
@@ -377,6 +383,9 @@ def get_profile_no_by_sequential_no(sequential_no: int) -> Optional[int]:
 
 
 def markdown_to_html(markdown_text: str) -> str:
+    """
+    Конвертирует Markdown в HTML-фрагмент.
+    """
     if not MARKDOWN_AVAILABLE:
         logging.warning("Markdown library not available, returning plain text wrapped in <p> tags")
         paragraphs = markdown_text.split('\n\n')
@@ -386,17 +395,17 @@ def markdown_to_html(markdown_text: str) -> str:
             if para:
                 html_parts.append(f"<p>{para}</p>")
         return '\n'.join(html_parts)
-
+    
     try:
         md = markdown.Markdown(extensions=['extra', 'nl2br', 'sane_lists'])
         html = md.convert(markdown_text)
-
+        
         html = re.sub(r'^<html[^>]*>', '', html, flags=re.IGNORECASE)
         html = re.sub(r'</html>$', '', html, flags=re.IGNORECASE)
         html = re.sub(r'^<body[^>]*>', '', html, flags=re.IGNORECASE)
         html = re.sub(r'</body>$', '', html, flags=re.IGNORECASE)
         html = html.strip()
-
+        
         logging.debug("Markdown converted to HTML (length: %d chars)", len(html))
         return html
     except Exception as e:
@@ -411,6 +420,9 @@ def markdown_to_html(markdown_text: str) -> str:
 
 
 def html_to_plain_text(html: str) -> str:
+    """
+    Извлекает plain text из HTML (убирает все теги).
+    """
     text = re.sub(r'<[^>]+>', '', html)
     text = text.replace('&nbsp;', ' ')
     text = text.replace('&amp;', '&')
@@ -423,7 +435,15 @@ def html_to_plain_text(html: str) -> str:
     return text.strip()
 
 
+# ==========================
+# Правильный CF_HTML через HtmlClipboard
+# ==========================
+
 class HtmlClipboard:
+    """
+    Минимальная реализация CF_HTML по рецепту HtmlClipboard (ActiveState/Gist).
+    Используется только для записи HTML в буфер обмена как 'HTML Format'.
+    """
     CF_HTML = None
 
     MARKER_BLOCK_OUTPUT = (
@@ -451,12 +471,16 @@ class HtmlClipboard:
 
     @classmethod
     def put_fragment(cls, fragment: str, source: str = "about:blank") -> None:
+        """
+        Кладёт HTML-фрагмент в буфер как 'HTML Format' (CF_HTML).
+        """
         import win32clipboard
 
         html = cls.DEFAULT_HTML_BODY % fragment
         fragment_start = html.index(fragment)
         fragment_end = fragment_start + len(fragment)
 
+        # selection == fragment
         selection_start = fragment_start
         selection_end = fragment_end
 
@@ -484,6 +508,12 @@ class HtmlClipboard:
 
 
 def copy_markdown_as_rich_text(markdown_text: str) -> bool:
+    """
+    Markdown → HTML → CF_HTML в буфере обмена.
+
+    Если всё прошло ок, возвращает True.
+    Medium / Chrome при Ctrl+V должны вставить форматированный текст.
+    """
     try:
         html_fragment = markdown_to_html(markdown_text)
         HtmlClipboard.put_fragment(html_fragment)
@@ -507,29 +537,36 @@ def copy_markdown_as_rich_text(markdown_text: str) -> bool:
 def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
     profile_no = get_profile_no(profile_id)
     logging.debug("Checking status of Ads Power profile ID: %s (No: %s)", profile_id, profile_no)
-
+    
     endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/active"
     params = {"profile_id": profile_id}
     headers = {}
     if ADS_POWER_API_KEY:
         headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
-
+        logging.debug("  Using API key for authentication")
+    
     try:
+        logging.debug("  GET request to: %s with params: %s", endpoint, params)
         response = requests.get(endpoint, params=params, headers=headers, timeout=10)
-        if response.status_code != 200:
+        logging.debug("  Response status code: %s", response.status_code)
+        
+        if response.status_code == 200:
+            data = response.json()
+            logging.debug("  Response data: %s", data)
+            
+            if data.get("code") == 0:
+                profile_data = data.get("data", {})
+                status = profile_data.get("status", "Unknown")
+                logging.info("Profile ID %s (No: %s) status: %s", profile_id, profile_no, status)
+                return profile_data
+            else:
+                error_msg = data.get("msg", "Unknown error")
+                logging.debug("  API returned error: %s", error_msg)
+                return None
+        else:
             logging.debug("  HTTP error: %s", response.status_code)
             return None
-
-        data = response.json()
-        if data.get("code") != 0:
-            logging.debug("  API returned error: %s", data.get("msg", "Unknown error"))
-            return None
-
-        profile_data = data.get("data", {}) or {}
-        status = profile_data.get("status", "Unknown")
-        logging.info("Profile ID %s (No: %s) status: %s", profile_id, profile_no, status)
-        return profile_data
-
+            
     except requests.exceptions.RequestException as e:
         logging.error("✗ Request error checking profile status: %s", e)
         return None
@@ -538,177 +575,36 @@ def check_ads_power_profile_status(profile_id: str) -> Optional[dict]:
         return None
 
 
-def _adspower_start_profile(profile_id: str) -> bool:
-    endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
-    headers = {"Content-Type": "application/json"}
-    if ADS_POWER_API_KEY:
-        headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
-
-    try:
-        resp = requests.post(endpoint, json={"profile_id": profile_id}, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            logging.error("Failed to start profile: HTTP %d", resp.status_code)
-            return False
-        data = resp.json()
-        if data.get("code") != 0:
-            logging.error("Failed to start profile: %s", data.get("msg", "Unknown error"))
-            return False
-        return True
-    except Exception as e:
-        logging.error("Error starting profile: %s", e)
-        return False
-
-
-def _wait_profile_active(profile_id: str, timeout_s: int = 90, poll_s: float = 3.0) -> Optional[dict]:
-    """
-    Ждёт, пока профиль станет Active и появятся ws.selenium + webdriver.
-    Возвращает profile_status dict (data из /active) или None.
-    """
-    deadline = time.time() + timeout_s
-    last_status = None
-    while time.time() < deadline:
-        st = check_ads_power_profile_status(profile_id)
-        if st:
-            last_status = st
-            status = st.get("status")
-            ws = st.get("ws") or {}
-            selenium_addr = ws.get("selenium")
-            webdriver_path = st.get("webdriver")
-            if status == "Active" and selenium_addr and webdriver_path:
-                return st
-        time.sleep(poll_s)
-    if last_status:
-        logging.error("Profile %s did not become ready in time. Last status=%s", profile_id, last_status.get("status"))
-    else:
-        logging.error("Profile %s did not become ready in time (no status).", profile_id)
-    return None
-
-
-
-def _safe_switch_to(driver, handle: str) -> bool:
-    """Безопасно переключается на window handle (вкладку)."""
-    try:
-        driver.switch_to.window(handle)
-        return True
-    except Exception:
-        return False
-
-
-def _ensure_tag_tab(profile: 'Profile') -> bool:
-    """
-    Гарантирует наличие отдельной вкладки-ярлыка (about:blank) с document.title == profile.window_tag.
-
-    Зачем:
-    - pygetwindow ищет окно по заголовку активной вкладки. Medium часто меняет title, поэтому держим стабильный tag.
-    - Для фокуса окна можно временно активировать tag-вкладку, сфокусировать окно, и вернуть Medium.
-    """
-    """
-    Создаёт/восстанавливает «tag tab» БЕЗ открытия новых вкладок через Selenium.
-
-    Почему так:
-    - AdsPower+Selenium иногда ломается на `switch_to.new_window()` (no such window).
-    - На некоторых профилях/расширениях `window.open()` заблокирован (LavaMoat scuttling).
-
-    Поэтому мы:
-    1) берём любую уже существующую вкладку,
-    2) переводим её на about:blank,
-    3) ставим стабильный document.title = window_tag,
-    4) сохраняем handle как tag_window_handle.
-    """
-    if not getattr(profile, "driver", None):
-        return False
-
-    driver = profile.driver
-    try:
-        handles = list(driver.window_handles or [])
-        if not handles:
-            return False
-
-        def _try_make_tag(handle: str) -> bool:
-            try:
-                if not _safe_switch_to(driver, handle):
-                    return False
-                # Важно: не выполняем JS на chrome-extension://... без навигации.
-                try:
-                    driver.get("about:blank")
-                except Exception:
-                    return False
-                # about:blank управляем — можно задать title
-                try:
-                    driver.execute_script("document.title = arguments[0];", profile.window_tag)
-                except Exception:
-                    return False
-                profile.tag_window_handle = driver.current_window_handle
-                return True
-            except Exception:
-                return False
-
-        # 1) Если tag handle уже известен и жив — просто обновим title
-        if profile.tag_window_handle and profile.tag_window_handle in handles:
-            if _try_make_tag(profile.tag_window_handle):
-                return True
-            profile.tag_window_handle = None
-
-        # 2) Пробуем любую вкладку, кроме Medium (если известна)
-        for h in handles:
-            if profile.medium_window_handle and h == profile.medium_window_handle:
-                continue
-            if _try_make_tag(h):
-                return True
-
-        # 3) На крайний случай — текущую вкладку
-        try:
-            current = driver.current_window_handle
-        except Exception:
-            current = handles[0]
-        return _try_make_tag(current)
-
-    except Exception:
-        return False
-
-
-def _find_existing_medium_tab(profile: 'Profile') -> Optional[str]:
-    """Ищет уже открытую вкладку Medium в этом профиле (по URL)."""
-    if not getattr(profile, "driver", None):
-        return None
-    driver = profile.driver
-    try:
-        for h in driver.window_handles or []:
-            try:
-                driver.switch_to.window(h)
-                url = (driver.current_url or "").lower()
-                if "medium.com" in url:
-                    return h
-            except Exception:
-                continue
-    except Exception:
-        return None
-    return None
-
 def close_profile(profile_id: str) -> bool:
+    """
+    Закрывает профиль Ads Power через API.
+    
+    Возвращает True при успехе, False при ошибке.
+    """
     profile_no = get_profile_no(profile_id)
     logging.info("Closing profile ID: %s (No: %s)", profile_id, profile_no)
-
+    
     endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/stop"
     headers = {"Content-Type": "application/json"}
     if ADS_POWER_API_KEY:
         headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
-
+    
     payload = {"profile_id": profile_id}
-
+    
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
         if response.status_code != 200:
             logging.error("Failed to close profile %d: HTTP %d", profile_no, response.status_code)
             return False
-
+        
         data = response.json()
         if data.get("code") != 0:
             logging.error("Failed to close profile %d: %s", profile_no, data.get("msg", "Unknown error"))
             return False
-
+        
         logging.info("✓ Profile %d (ID: %s) closed successfully", profile_no, profile_id)
-
+        
+        # Очищаем driver из словаря профилей
         if profile_no in profiles:
             profile = profiles[profile_no]
             if profile.driver:
@@ -718,8 +614,7 @@ def close_profile(profile_id: str) -> bool:
                     logging.debug("Error quitting driver for profile %d: %s", profile_no, e)
                 profile.driver = None
             profile.medium_window_handle = None
-            profile.tag_window_handle = None
-
+        
         return True
     except Exception as e:
         logging.error("Error closing profile %d: %s", profile_no, e)
@@ -727,162 +622,183 @@ def close_profile(profile_id: str) -> bool:
 
 
 def ensure_profile_ready(profile_no: int) -> bool:
-    """
-    ЕДИНАЯ точка подготовки профиля:
-    - если профиль закрыт/не Active: стартуем через API и ждём Active + ws.selenium + webdriver
-    - подключаем Selenium к уже запущенному профилю
-    - создаём/поддерживаем вкладку-ярлык (tag tab) для стабильного фокуса окна
-    """
     if not SELENIUM_AVAILABLE:
         logging.error("Selenium not available! Install with: pip install selenium")
         return False
-
+    
     if profile_no not in profiles:
         profile_id = get_profile_id(profile_no)
         if not profile_id:
             logging.error("Profile No %d not found in PROFILE_MAPPING", profile_no)
             return False
         profiles[profile_no] = Profile(profile_no=profile_no, profile_id=profile_id)
-
+    
     profile = profiles[profile_no]
-
-    # Если driver уже жив — просто проверим/восстановим tag tab
+    
     if profile.driver:
         try:
-            _ = profile.driver.current_url
-            _ensure_tag_tab(profile)
+            profile.driver.current_url
+            logging.debug("Profile %d already has active driver", profile_no)
             return True
-        except Exception:
+        except (Exception, AttributeError) as e:
+            # WebDriverException, NoSuchWindowException, или driver стал None
+            logging.debug("Profile %d driver is dead, recreating... (error: %s)", profile_no, e)
             profile.driver = None
-            profile.tag_window_handle = None
-
-    # 1) Гарантируем Active + наличие ws.selenium/webdriver
+    
     profile_status = check_ads_power_profile_status(profile.profile_id)
-    ws = (profile_status or {}).get("ws") or {}
-    status = (profile_status or {}).get("status")
-    selenium_ok = bool(ws.get("selenium"))
-    webdriver_ok = bool((profile_status or {}).get("webdriver"))
-
-    if status != "Active" or not selenium_ok or not webdriver_ok:
-        logging.info("Profile %d (ID: %s) is not ready/Active, starting via API...", profile_no, profile.profile_id)
-        if not _adspower_start_profile(profile.profile_id):
+    
+    # Проверяем статус профиля - если он не активен, пытаемся запустить
+    status = None
+    if profile_status:
+        status = profile_status.get("status", "Unknown")
+    
+    if not profile_status or status != "Active":
+        logging.info("Profile %d (ID: %s) is not active (status: %s), starting...", profile_no, profile.profile_id, status)
+        
+        endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
+        headers = {"Content-Type": "application/json"}
+        if ADS_POWER_API_KEY:
+            headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        
+        payload = {"profile_id": profile.profile_id}
+        
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            if response.status_code != 200:
+                logging.error("Failed to start profile %d: HTTP %d", profile_no, response.status_code)
+                return False
+            
+            data = response.json()
+            if data.get("code") != 0:
+                logging.error("Failed to start profile %d: %s", profile_no, data.get("msg", "Unknown error"))
+                return False
+            
+            # Ждем инициализацию профиля с несколькими попытками
+            max_retries = 5
+            retry_count = 0
+            while retry_count < max_retries:
+                time.sleep(3)
+                profile_status = check_ads_power_profile_status(profile.profile_id)
+                if profile_status:
+                    status = profile_status.get("status", "Unknown")
+                    if status == "Active":
+                        logging.info("Profile %d is now Active", profile_no)
+                        break
+                retry_count += 1
+                logging.debug("Waiting for profile %d to become Active (attempt %d/%d)...", profile_no, retry_count, max_retries)
+            
+            if not profile_status or status != "Active":
+                logging.error("Profile %d still not active after start (status: %s)", profile_no, status)
+                return False
+        except Exception as e:
+            logging.error("Error starting profile %d: %s", profile_no, e)
             return False
-        profile_status = _wait_profile_active(profile.profile_id, timeout_s=120, poll_s=3.0)
-        if not profile_status:
-            return False
-
-    # Иногда Active есть, но ws/webdriver приезжают позже
-    ws = (profile_status or {}).get("ws") or {}
-    selenium_address = ws.get("selenium") or ""
-    webdriver_path = (profile_status or {}).get("webdriver") or ""
-    if not selenium_address or not webdriver_path:
-        profile_status = _wait_profile_active(profile.profile_id, timeout_s=60, poll_s=2.0)
-        if not profile_status:
-            return False
-        ws = (profile_status or {}).get("ws") or {}
-        selenium_address = ws.get("selenium") or ""
-        webdriver_path = (profile_status or {}).get("webdriver") or ""
-
+    
+    # Проверяем, что статус действительно Active перед получением selenium/webdriver
+    if status != "Active":
+        logging.error("Profile %d status is not Active (status: %s), cannot proceed", profile_no, status)
+        return False
+    
+    ws_data = profile_status.get("ws", {})
+    selenium_address = ws_data.get("selenium", "")
+    webdriver_path = profile_status.get("webdriver", "")
+    
     if not selenium_address or not webdriver_path:
         logging.error("Missing selenium address or webdriver path for profile %d", profile_no)
         return False
-
-    # 2) Подключаем Selenium к профилю
+    
     try:
         chrome_options = Options()
         chrome_options.add_experimental_option("debuggerAddress", selenium_address)
-
+        
         service = Service(webdriver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
-
-        # Важный нюанс: remote debug-окна AdsPower иногда не поддерживают команду maximize_window
-        # (может давать 500 / "Browser window not found"). Максимизацию делаем только через pygetwindow.
-
+        
+        try:
+            driver.maximize_window()
+            time.sleep(0.5)
+        except Exception as max_err:
+            logging.debug("  Window already maximized (or maximize failed): %s", max_err)
+            time.sleep(0.2)
+        
+        try:
+            all_handles = driver.window_handles
+            if all_handles:
+                driver.switch_to.window(all_handles[0])
+                driver.get("about:blank")
+                driver.execute_script(f"document.title = '{profile.window_tag}';")
+                time.sleep(0.5)
+            else:
+                driver.get("about:blank")
+                driver.execute_script(f"document.title = '{profile.window_tag}';")
+                time.sleep(0.5)
+        except Exception as tag_err:
+            logging.warning("  Failed to set window_tag: %s, but continuing...", tag_err)
+        
         profile.driver = driver
-
-        # 3) Создаём tag-tab для стабильного поиска/фокуса окна
-        _ensure_tag_tab(profile)
-
         logging.info(
             "✓ Profile %d (ID: %s) ready with window_tag: %s",
             profile_no, profile.profile_id, profile.window_tag
         )
         return True
-
+        
     except Exception as e:
         logging.error("Error creating Selenium driver for profile %d: %s", profile_no, e)
         return False
 
 
-
 def focus_profile_window(profile_no: int) -> bool:
     """
     Безопасно фокусирует и максимизирует окно профиля.
-    Требования:
-    - если профиль открыт: просто вывести на передний план + максимизировать
-    - если уже максимизировано: ошибок быть не должно (любые ошибки maximize игнорируем)
-    - если окно не находится из-за title Medium: временно активируем tag-tab и повторяем поиск
+    Если окно уже максимизировано, не вызывает ошибок.
     """
     if profile_no not in profiles:
         logging.error("Profile %d not found in profiles dict", profile_no)
         return False
-
+    
     profile = profiles[profile_no]
-
+    
     try:
         import pygetwindow as gw
-
-        def _find():
-            wins = gw.getWindowsWithTitle(profile.window_tag)
-            if wins:
-                return wins
-            for w in gw.getAllWindows():
-                if profile.window_tag in (w.title or ""):
-                    return [w]
-            return []
-
-        windows = _find()
-
-        # Если не нашли — попробуем активировать tag tab и поискать ещё раз
-        if not windows and profile.driver:
-            try:
-                _ensure_tag_tab(profile)
-                if profile.tag_window_handle:
-                    _safe_switch_to(profile.driver, profile.tag_window_handle)
-                    time.sleep(0.2)  # дать ОС обновить заголовок
-                windows = _find()
-            except Exception:
-                windows = _find()
-
+        
+        windows = gw.getWindowsWithTitle(profile.window_tag)
+        if not windows:
+            all_windows = gw.getAllWindows()
+            for win in all_windows:
+                if profile.window_tag in win.title:
+                    windows = [win]
+                    break
+        
         if not windows:
             logging.warning("Window with tag '%s' not found for profile %d", profile.window_tag, profile_no)
             return False
-
+        
         win = windows[0]
-
-        try:
-            if getattr(win, "isMinimized", False):
-                win.restore()
-                time.sleep(0.15)
-        except Exception:
-            pass
-
-        try:
-            win.activate()
-            time.sleep(0.15)
-        except Exception:
-            pass
-
+        
+        # Если окно минимизировано - разворачиваем
+        if win.isMinimized:
+            logging.debug("Window is minimized, restoring...")
+            win.restore()
+            time.sleep(0.3)
+        
+        # Активируем окно
+        win.activate()
+        time.sleep(0.3)
+        
+        # Безопасно максимизируем: просто вызываем maximize()
+        # pygetwindow должен безопасно обработать это даже если окно уже максимизировано
         try:
             win.maximize()
+            time.sleep(0.5)
+            logging.debug("Window maximized (or was already maximized)")
+        except Exception as max_err:
+            # Если уже максимизировано или произошла другая ошибка, это нормально - продолжаем
+            logging.debug("Window may already be maximized or maximize failed: %s", max_err)
             time.sleep(0.2)
-        except Exception:
-            # уже максимизировано или maximize не поддержан — не критично
-            pass
-
+        
         logging.info("✓ Profile %d window focused and maximized: %s", profile_no, win.title)
         return True
-
+        
     except ImportError:
         logging.error("pygetwindow not available")
         return False
@@ -891,165 +807,84 @@ def focus_profile_window(profile_no: int) -> bool:
         return False
 
 
-
-def _wait_document_ready(driver, timeout_s: int = 30) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        try:
-            state = driver.execute_script("return document.readyState")
-            if state == "complete":
-                return True
-        except Exception:
-            pass
-        time.sleep(0.2)
-    return False
-
-
 def ensure_medium_tab_open(profile: Profile, profile_no: int) -> bool:
-    """Гарантирует активную вкладку Medium (new-story) так, чтобы PyAutoGUI мог работать.
-
-    Важно:
-    - НЕ используем `driver.switch_to.new_window()` и `window.open()` — в AdsPower это
-      периодически падает (no such window) и/или блокируется расширениями (LavaMoat).
-    - Открываем новую вкладку через PyAutoGUI (Ctrl+T) уже в сфокусированном окне.
+    """
+    Убеждается, что вкладка Medium открыта и активна.
+    Если нет - открывает её. Обновляет profile.medium_window_handle.
+    
+    Возвращает True если успешно, False при ошибке.
     """
     if not profile.driver:
         logging.error("Driver not available for profile %d", profile_no)
         return False
-
-    driver = profile.driver
-
+    
     try:
-        # 1) Стабильный title для поиска окна через pygetwindow
-        _ensure_tag_tab(profile)
-
-        # 2) Активируем tag-tab (чтобы заголовок окна точно был window_tag) и фокусируем окно
-        if profile.tag_window_handle:
-            _safe_switch_to(driver, profile.tag_window_handle)
-            time.sleep(0.2)
-
-        if not focus_profile_window(profile_no):
-            logging.warning("Failed to focus/maximize window (continuing anyway)...")
-
-        time.sleep(0.2)
-
-        # 3) Открываем новую вкладку Medium ЧЕРЕЗ PyAutoGUI
-        handles_before = set(driver.window_handles or [])
-
-        try:
-            # Новая вкладка становится активной
-            pyautogui.hotkey('ctrl', 't')
-            time.sleep(0.35)
-
-            # Вставляем URL через буфер (быстрее и надёжнее)
-            pyperclip.copy(MEDIUM_NEW_STORY_URL)
-            time.sleep(0.1)
-            pyautogui.hotkey('ctrl', 'l')
-            time.sleep(0.05)
-            pyautogui.hotkey('ctrl', 'v')
-            time.sleep(0.05)
-            pyautogui.press('enter')
-        except Exception as e:
-            logging.error("Failed to open Medium tab via PyAutoGUI: %s", e)
+        # Переключаемся на нужное окно
+        target_handle = find_window_by_tag(profile)
+        if not target_handle:
+            logging.error("No window handles available!")
             return False
-
-        # 4) Ждём, пока Selenium увидит новую вкладку (handle)
-        new_handle = None
-        deadline = time.time() + 8.0
-        while time.time() < deadline:
-            handles_now = list(driver.window_handles or [])
-            diff = [h for h in handles_now if h not in handles_before]
-            if diff:
-                new_handle = diff[-1]
-                break
-            time.sleep(0.2)
-
-        # 5) Если handle не появился, попробуем найти вкладку Medium по URL
-        if not new_handle:
-            found = _find_existing_medium_tab(profile)
-            if found:
-                new_handle = found
-
-        if new_handle:
-            _safe_switch_to(driver, new_handle)
-            profile.medium_window_handle = new_handle
-        else:
-            # Фоллбек: используем текущую вкладку драйвера
-            try:
-                profile.medium_window_handle = driver.current_window_handle
-            except Exception:
-                pass
-
-        # 6) Усиливаем: навигация Selenium (если PyAutoGUI открыло что-то не то)
-        try:
-            driver.get(MEDIUM_NEW_STORY_URL)
-        except Exception:
-            pass
-
-        _wait_document_ready(driver, timeout_s=30)
-        time.sleep(0.25)
-
-        # 7) Подмешаем tag в title (иногда помогает, но не полагаемся)
-        try:
-            driver.execute_script(
-                "document.title = arguments[0] + ' | ' + (document.title || 'Medium');",
-                profile.window_tag
-            )
-        except Exception:
-            pass
-
-        # В этот момент активная вкладка на экране — Medium (мы её только что открывали).
-        logging.info(
-            "✓ Medium tab ready & active. Handle=%s URL=%s",
-            getattr(profile, 'medium_window_handle', None),
-            getattr(driver, 'current_url', '')
-        )
-
-        logging.info(
-            "Waiting %.0f seconds for page to stabilize before starting PyAutoGUI cycle...",
-            WAIT_AFTER_OPEN_TAB
-        )
+        
+        profile.driver.switch_to.window(target_handle)
+        
+        # Открываем Medium
+        logging.info("Navigating to Medium URL: %s", MEDIUM_NEW_STORY_URL)
+        profile.driver.get(MEDIUM_NEW_STORY_URL)
+        time.sleep(3)
+        
+        profile.medium_window_handle = profile.driver.current_window_handle
+        logging.info("✓ Medium URL opened, window handle saved: %s", profile.medium_window_handle)
+        
+        # Убеждаемся, что окно активно
+        focus_profile_window(profile_no)
+        time.sleep(0.5)
+        
+        # Проверяем URL
+        current_url = profile.driver.current_url
+        logging.info("Current URL: %s", current_url)
+        
+        if 'medium.com' not in current_url:
+            logging.warning("URL doesn't contain 'medium.com', retrying...")
+            profile.driver.get(MEDIUM_NEW_STORY_URL)
+            time.sleep(3)
+            profile.medium_window_handle = profile.driver.current_window_handle
+        
+        logging.info("Waiting 10 seconds for page to load before starting PyAutoGUI cycle...")
         wait_with_log(WAIT_AFTER_OPEN_TAB, "Page load wait", 10.0)
+        
         return True
-
+        
     except Exception as e:
         logging.error("Failed to open Medium URL: %s", e, exc_info=True)
         return False
 
 
-
 def find_window_by_tag(profile: Profile) -> Optional[str]:
     """
-    Находит window handle вкладки, где title содержит window_tag.
-    С учётом того, что у нас есть отдельная tag-tab, это почти всегда работает.
+    Находит window handle окна с указанным window_tag.
+    Возвращает handle или None если не найдено.
     """
     if not profile.driver:
         return None
-
+    
     try:
-        handles = profile.driver.window_handles or []
-        if not handles:
+        all_handles = profile.driver.window_handles
+        if not all_handles:
             return None
-
-        # 1) Сначала tag-tab, если есть
-        if profile.tag_window_handle and profile.tag_window_handle in handles:
-            return profile.tag_window_handle
-
-        # 2) Ищем по title
-        for h in handles:
+        
+        for handle in all_handles:
             try:
-                profile.driver.switch_to.window(h)
-                title = profile.driver.title or ""
+                profile.driver.switch_to.window(handle)
+                title = profile.driver.title
                 if profile.window_tag in title:
-                    return h
-            except Exception:
+                    return handle
+            except (Exception, AttributeError) as e:
+                # WebDriverException, NoSuchWindowException, или окно закрылось
+                logging.debug("Could not get title for handle %s: %s", handle, e)
                 continue
-
-        # 3) Иначе Medium handle
-        if profile.medium_window_handle and profile.medium_window_handle in handles:
-            return profile.medium_window_handle
-
-        return handles[0]
+        
+        # Если окно с тегом не найдено, возвращаем первое доступное
+        return all_handles[0] if all_handles else None
     except Exception as e:
         logging.error("Error finding window by tag: %s", e)
         return None
@@ -1058,39 +893,25 @@ def find_window_by_tag(profile: Profile) -> Optional[str]:
 def minimize_profile_window(profile_no: int) -> bool:
     if profile_no not in profiles:
         return False
-
+    
     profile = profiles[profile_no]
-
+    
     try:
         import pygetwindow as gw
-
-        def _find_windows():
-            wins = gw.getWindowsWithTitle(profile.window_tag)
-            if wins:
-                return wins
-            for w in gw.getAllWindows():
-                if profile.window_tag in (w.title or ""):
-                    return [w]
-            return []
-
-        windows = _find_windows()
-
-        # Если Medium активен и title не содержит tag — временно активируем tag-tab
-        if not windows and getattr(profile, "driver", None):
-            try:
-                _ensure_tag_tab(profile)
-                if profile.tag_window_handle:
-                    _safe_switch_to(profile.driver, profile.tag_window_handle)
-                    time.sleep(0.2)
-                windows = _find_windows()
-            except Exception:
-                windows = _find_windows()
-
+        
+        windows = gw.getWindowsWithTitle(profile.window_tag)
+        if not windows:
+            all_windows = gw.getAllWindows()
+            for win in all_windows:
+                if profile.window_tag in win.title:
+                    windows = [win]
+                    break
+        
         if windows:
             windows[0].minimize()
             logging.debug("Profile %d window minimized", profile_no)
             return True
-
+        
         return False
     except ImportError:
         logging.error("pygetwindow not available for minimizing window")
@@ -1102,65 +923,134 @@ def minimize_profile_window(profile_no: int) -> bool:
 
 def open_and_maximize_profile(sequential_no: int) -> Optional[str]:
     """
-    Открывает и подготавливает профиль по sequential_no (1-10) так, как нужно для PyAutoGUI:
-
-    - если профиль закрыт: стартует через API и ждёт готовности (делает ensure_profile_ready)
-    - если профиль уже открыт: НЕ перезапускает, а просто цепляет Selenium и фокусирует/максимизирует окно
-    - затем гарантирует Medium new-story вкладку и делает её активной на экране
+    Открывает и максимизирует профиль по sequential_no (1-10).
+    Если профиль открыт - разворачивает и максимизирует.
+    Если закрыт - открывает через API, затем максимизирует.
+    После этого открывает страницу Medium.
+    
+    Возвращает profile_id при успехе, None при ошибке.
     """
-    logging.info("=" * 60)
+    logging.info("="*60)
     logging.info("Opening profile with sequential_no: %d", sequential_no)
-    logging.info("=" * 60)
-
+    logging.info("="*60)
+    
+    # Получаем profile_id и profile_no по sequential_no
     profile_id = get_profile_id_by_sequential_no(sequential_no)
     if not profile_id:
         logging.error("Profile with sequential_no %d not found", sequential_no)
         return None
-
+    
     profile_no = get_profile_no_by_sequential_no(sequential_no)
     if not profile_no:
         logging.error("Profile_no not found for sequential_no %d", sequential_no)
         return None
-
-    logging.info("Profile info: %s (No: %s, Seq: %s)", profile_id, profile_no, sequential_no)
-
+    
+    profile_info = f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
+    logging.info("Profile info: %s", profile_info)
+    
+    # Проверяем статус профиля через API
+    logging.info("Checking profile status via API...")
+    profile_status = check_ads_power_profile_status(profile_id)
+    
+    # Проверяем статус профиля - если он не активен, пытаемся запустить
+    status = None
+    if profile_status:
+        status = profile_status.get("status", "Unknown")
+    
+    if not profile_status or status != "Active":
+        # Профиль закрыт или неактивен - открываем через API
+        logging.info("Profile is closed or inactive (status: %s), opening via API...", status)
+        endpoint = f"{ADS_POWER_API_URL}/api/v2/browser-profile/start"
+        headers = {"Content-Type": "application/json"}
+        if ADS_POWER_API_KEY:
+            headers["Authorization"] = f"Bearer {ADS_POWER_API_KEY}"
+        
+        payload = {"profile_id": profile_id}
+        
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+            if response.status_code != 200:
+                logging.error("Failed to start profile: HTTP %d", response.status_code)
+                return None
+            
+            data = response.json()
+            if data.get("code") != 0:
+                logging.error("Failed to start profile: %s", data.get("msg", "Unknown error"))
+                return None
+            
+            logging.info("✓ Profile started via API, waiting for initialization...")
+            
+            # Ждем инициализацию профиля с несколькими попытками
+            max_retries = 5
+            retry_count = 0
+            while retry_count < max_retries:
+                time.sleep(3)
+                profile_status = check_ads_power_profile_status(profile_id)
+                if profile_status:
+                    status = profile_status.get("status", "Unknown")
+                    if status == "Active":
+                        logging.info("Profile is now Active")
+                        break
+                retry_count += 1
+                logging.debug("Waiting for profile to become Active (attempt %d/%d)...", retry_count, max_retries)
+            
+            if not profile_status or status != "Active":
+                logging.error("Profile still not active after start (status: %s)", status)
+                return None
+        except Exception as e:
+            logging.error("Error starting profile: %s", e)
+            return None
+    else:
+        # Профиль уже открыт и активен - просто переключаемся на него
+        logging.info("Profile is already open and active (status: %s), switching to it...", status)
+    
+    # Убеждаемся, что профиль готов (создаем/обновляем driver)
+    # Если профиль уже был открыт, ensure_profile_ready просто переиспользует существующий driver
     if not ensure_profile_ready(profile_no):
         logging.error("Failed to ensure profile %d is ready", profile_no)
         return None
-
-    # Фокус/максимизация окна (безопасно и без ошибок)
+    
+    # Безопасно максимизируем окно (работает и для уже открытых профилей)
+    logging.info("Maximizing profile window...")
     if not focus_profile_window(profile_no):
         logging.warning("Failed to focus/maximize window, but continuing...")
-
-    # Medium вкладка должна быть активна на экране
+    
+    # Открываем Medium URL через Selenium (или переключаемся на существующую вкладку)
+    logging.info("Opening Medium URL in browser...")
     profile = profiles[profile_no]
     if not ensure_medium_tab_open(profile, profile_no):
         logging.error("Failed to open Medium tab for profile %d", profile_no)
         return None
-
-    logging.info("=" * 60)
-    logging.info("✓ Profile ready: window focused, Medium tab active")
-    logging.info("=" * 60)
+    
+    logging.info("="*60)
+    logging.info("✓ Profile ready: window maximized, Medium tab open")
+    logging.info("="*60)
+    
     return profile_id
 
 
-
 def open_ads_power_profile(profile_id: str) -> Optional[str]:
+    """
+    Открывает профиль по profile_id (для обратной совместимости).
+    Конвертирует profile_id в sequential_no и вызывает open_and_maximize_profile().
+    
+    Возвращает profile_id при успехе, None при ошибке.
+    """
     profile_no = get_profile_no(profile_id)
     if profile_no == 0:
         logging.error("Profile ID %s not found in PROFILE_MAPPING", profile_id)
         return None
-
+    
     sequential_no = get_sequential_no(profile_no)
     if not sequential_no:
         logging.error("Profile No %d has no sequential_no mapping", profile_no)
         return None
-
+    
+    # Используем основную функцию
     return open_and_maximize_profile(sequential_no)
 
 
 def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
-    # --- НЕ ТРОГАЛ: всё как у тебя ниже ---
     article_id = article.get('id') if isinstance(article, dict) else article[0]
     profile_no = get_profile_no(profile_id)
     sequential_no = get_sequential_no(profile_no)
@@ -1168,7 +1058,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     logging.info("="*60)
     logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
     logging.info("="*60)
-
+    
     try:
         if isinstance(article, dict):
             title = article.get('title', '').strip()
@@ -1190,28 +1080,28 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                 article[7] if len(article) > 7 else '',
                 article[8] if len(article) > 8 else ''
             ]
-
+        
         hashtags = [h for h in hashtags if h]
-
+        
         logging.info("Article title: %s", title[:50] + "..." if len(title) > 50 else title)
         logging.info("Article body length: %d characters", len(body))
         logging.info("Hashtags: %s", hashtags)
         logging.info("")
-
+        
         logging.info("="*60)
         logging.info("STEP 1: Ensuring profile window is active and on Medium tab...")
         try:
             profile_no = get_profile_no(profile_id)
             focus_profile_window(profile_no)
             time.sleep(1)
-
+            
             profile = profiles[profile_no]
             if profile.driver and profile.medium_window_handle:
                 try:
                     profile.driver.switch_to.window(profile.medium_window_handle)
                     current_url = profile.driver.current_url
                     logging.info("  Current URL on Medium tab: %s", current_url)
-
+                    
                     if 'medium.com' not in current_url:
                         logging.warning("  Not on Medium page, navigating to Medium...")
                         profile.driver.get(MEDIUM_NEW_STORY_URL)
@@ -1223,52 +1113,46 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                         profile.driver.get(MEDIUM_NEW_STORY_URL)
                         time.sleep(2)
                         profile.medium_window_handle = profile.driver.current_window_handle
-
+            
             logging.info("  ✓ Profile window is active (Medium URL already opened via Selenium)")
         except Exception as e:
             logging.error("  ✗ Failed to ensure window is active: %s", e)
             return None
-
+        
         logging.info("STEP 1.1: Reloading the page")
         try:
             time.sleep(2)
             pyautogui.press('f5')
             logging.info("Reloaded")
-            time.sleep(2)
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
-
+        
+        
         logging.info("STEP 2: Clicking on title input field...")
         logging.info("  Coordinates: %s", COORDS_TITLE_INPUT)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_TITLE_INPUT, label="STEP 2: title click")
-            time.sleep(2)
-            pyautogui.click(*COORDS_TITLE_INPUT)
-            time.sleep(1)
             pyautogui.click(*COORDS_TITLE_INPUT)
             logging.info("  ✓ Clicked successfully")
-            time.sleep(1)
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_TITLE_CLICK, "STEP 2", 10.0)
-
+        
         logging.info("STEP 3: Pasting title...")
         logging.info("  Title length: %d characters", len(title))
         try:
             pyperclip.copy(title)
-            time.sleep(1)
+            time.sleep(0.2)
             pyautogui.hotkey('ctrl', 'v')
             logging.info("  ✓ Title pasted successfully")
         except Exception as e:
             logging.error("  ✗ Failed to paste title: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_TITLE_PASTE, "STEP 3", 10.0)
-
+        
         logging.info("STEP 4: Pressing Enter...")
         try:
             pyautogui.press('enter')
@@ -1276,20 +1160,21 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         except Exception as e:
             logging.error("  ✗ Failed to press Enter: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_ENTER, "STEP 4", 10.0)
-
+        
+        # ======== ВАЖНО: вставка body только через Clipboard CF_HTML ========
         logging.info("STEP 5: Pasting body as Rich Text (HTML via CF_HTML)...")
         logging.info("  Body length: %d characters", len(body))
-
-        time.sleep(1.5)
-
+        
+        time.sleep(1.5)  # даём Medium переключить фокус в body
+        
         try:
             logging.debug("  Converting Markdown to HTML and placing to clipboard as CF_HTML...")
             if not copy_markdown_as_rich_text(body):
                 logging.warning("  Failed to copy as Rich Text, falling back to plain text")
                 pyperclip.copy(body)
-
+            
             time.sleep(0.5)
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.5)
@@ -1297,43 +1182,36 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         except Exception as e:
             logging.error("  ✗ Failed to paste body: %s", e, exc_info=True)
             return None
-
+        
         wait_with_log(WAIT_AFTER_BODY_PASTE, "STEP 5", 10.0)
-
+        
         logging.info("STEP 6: Clicking first Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_1)
         logging.info("  Waiting 5 seconds before clicking Publish...")
         time.sleep(5)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_PUBLISH_BUTTON_1, label="STEP 6: publish 1 click")
-            time.sleep(2)
             pyautogui.click(*COORDS_PUBLISH_BUTTON_1)
-            time.sleep(1)
             logging.info("  ✓ Clicked successfully")
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_PUBLISH_1, "STEP 6", 10.0)
-
+        
         logging.info("STEP 7: Clicking on hashtags input field...")
         logging.info("  Coordinates: %s", COORDS_HASHTAGS_INPUT)
         try:
-            time.sleep(1)
-            capture_click_screenshot(COORDS_HASHTAGS_INPUT, label="STEP 7: hash click")
-            time.sleep(2)
             pyautogui.click(*COORDS_HASHTAGS_INPUT)
             time.sleep(1)
             pyautogui.click(*COORDS_HASHTAGS_INPUT)
             logging.info("  ✓ Clicked successfully")
-
+            
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_HASHTAGS_CLICK, "STEP 7", 10.0)
-
+        
         logging.info("STEP 8: Pasting hashtags one by one...")
         logging.info("  Hashtags to paste: %s", hashtags[:5])
         try:
@@ -1344,27 +1222,24 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                     time.sleep(0.2)
                     pyautogui.hotkey('ctrl', 'v')
                     wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 8 hashtag {i+1}", 10.0)
-
+                    
                     if i < len(hashtags[:5]) - 1:
                         logging.debug("  Adding comma after hashtag %d", i+1)
                         pyautogui.write(',', interval=0.1)
                         wait_with_log(WAIT_BETWEEN_HASHTAGS, f"STEP 8 comma {i+1}", 10.0)
-
+            
             logging.info("  ✓ All hashtags pasted successfully")
             logging.info("  Final hashtags: %s", ", ".join(hashtags[:5]))
         except Exception as e:
             logging.error("  ✗ Failed to paste hashtags: %s", e)
             return None
-
+        
         logging.info("STEP 9: Clicking final Publish button...")
         logging.info("  Coordinates: %s", COORDS_PUBLISH_BUTTON_2)
         logging.info("  Waiting 3 seconds before clicking final Publish...")
         time.sleep(3)
         try:
-            capture_click_screenshot(COORDS_PUBLISH_BUTTON_2, label="STEP 9: publish 2 click")
-            time.sleep(2)
             pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
-            time.sleep(1)
             logging.info("  ✓ First click successful")
             time.sleep(1)
             pyautogui.click(*COORDS_PUBLISH_BUTTON_2)
@@ -1372,19 +1247,20 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         except Exception as e:
             logging.error("  ✗ Failed to click: %s", e)
             return None
-
+        
         wait_with_log(WAIT_AFTER_PUBLISH_2, "STEP 9", 10.0)
         logging.info("  ✓ Publication should be complete")
-
+        
         logging.info("STEP 10: Getting published article URL via Selenium...")
         try:
             profile_no = get_profile_no(profile_id)
             profile = profiles[profile_no]
-
+            
             if profile.driver and profile.medium_window_handle:
                 try:
                     profile.driver.switch_to.window(profile.medium_window_handle)
                 except (Exception, AttributeError) as e:
+                    # NoSuchWindowException или handle стал невалидным
                     logging.debug("Window handle invalid, searching for Medium window: %s", e)
                     all_windows = profile.driver.window_handles
                     for window in all_windows:
@@ -1399,7 +1275,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                     else:
                         if all_windows:
                             profile.driver.switch_to.window(all_windows[-1])
-
+            
             if profile.driver:
                 url = profile.driver.current_url
                 logging.info("  ✓ URL retrieved via Selenium")
@@ -1416,7 +1292,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         except Exception as e:
             logging.error("  ✗ Failed to get URL: %s", e)
             return None
-
+        
         if url and url.startswith('http'):
             logging.info("="*60)
             logging.info("✓ Article published successfully!")
@@ -1430,7 +1306,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             logging.warning("  Expected: URL starting with 'http'")
             logging.warning("="*60)
             return None
-
+        
     except Exception as e:
         logging.error("Error posting article ID %s: %s", article_id, e, exc_info=True)
         return None
@@ -1440,21 +1316,21 @@ def main():
     logging.info("="*60)
     logging.info("Starting Medium Poster Script (PyAutoGUI + Ads Power)")
     logging.info("="*60)
-
+    
     logging.info("Connecting to PostgreSQL...")
     pg_conn = get_pg_conn()
-
+    
     try:
         tables = get_refined_articles_tables(pg_conn)
         if not tables:
             logging.error("No refined_articles tables found in database!")
             return
-
+        
         logging.info("")
         logging.info("Available tables:")
         for i, table in enumerate(tables, 1):
             logging.info("  %d. %s", i, table)
-
+        
         table_choice = input("\nEnter table number (or table name): ").strip()
         try:
             table_index = int(table_choice) - 1
@@ -1469,27 +1345,27 @@ def main():
             else:
                 logging.error("Table '%s' not found!", table_choice)
                 return
-
+        
         logging.info("Selected table: %s", selected_table)
-
+        
         ensure_profile_id_column(pg_conn, selected_table)
-
+        
         logging.info("")
         article_selection = input("Enter article IDs (e.g., '1,2,3' or '1-5,10' or leave empty for all unpublished): ").strip()
-
+        
         if article_selection:
             article_ids = parse_id_selection(article_selection)
             logging.info("Selected article IDs: %s", article_ids)
         else:
             article_ids = None
             logging.info("Will fetch all unpublished articles")
-
+        
         articles = get_articles_to_post(pg_conn, selected_table, article_ids)
-
+        
         if not articles:
             logging.warning("No articles to post!")
             return
-
+        
         unpublished_articles = []
         for article in articles:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
@@ -1498,92 +1374,108 @@ def main():
                 unpublished_articles.append(article)
             else:
                 logging.info("Skipping article ID %s (already published: %s)", article_id, url)
-
+        
         if not unpublished_articles:
             logging.warning("All selected articles are already published!")
             return
-
+        
         logging.info("Articles to post: %d", len(unpublished_articles))
         logging.info("")
-
+        
         response = input(f"Ready to post {len(unpublished_articles)} article(s). Press Enter to start, or 'q' to quit: ").strip().lower()
         if response == 'q':
             logging.info("Aborted by user")
             return
-
+        
+        # Используем sequential_no от 1 до 10 (циклически)
         sequential_index = 0
+        # Безопасно получаем максимальный sequential_no
         if not PROFILE_SEQUENTIAL_MAPPING:
             logging.error("PROFILE_SEQUENTIAL_MAPPING is empty! Cannot proceed.")
             return
-
+        
         max_sequential_no = max(PROFILE_SEQUENTIAL_MAPPING.values())
         if max_sequential_no <= 0:
             logging.error("Invalid max_sequential_no: %d. Must be > 0", max_sequential_no)
             return
-
+        
         posted_count = 0
         failed_count = 0
-
+        
         for article in unpublished_articles:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
-
+            
+            # Выбираем sequential_no циклически (1, 2, 3, ..., max_sequential_no, 1, 2, ...)
             sequential_no = (sequential_index % max_sequential_no) + 1
             sequential_index += 1
-
+            
             logging.info("")
             logging.info("="*60)
             logging.info("Processing article ID %s with profile sequential_no: %d", article_id, sequential_no)
             logging.info("="*60)
-
+            
+            # Открываем и максимизируем профиль через новую функцию
             profile_id = open_and_maximize_profile(sequential_no)
             if not profile_id:
                 logging.error("Failed to open profile with sequential_no %d, skipping article ID %s", sequential_no, article_id)
                 failed_count += 1
                 continue
-
+            
             profile_no = get_profile_no(profile_id)
             profile_info = f"{profile_id} (No: {profile_no}, Seq: {sequential_no})"
             logging.info("Profile ready: %s", profile_info)
-
+            
+            # Небольшая пауза перед началом работы с PyAutoGUI
             time.sleep(2)
-
+            
             try:
                 url = post_article_to_medium(article, profile_id)
-
+                
                 if url:
+                    # Сохраняем ссылку в базу данных
                     update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                     posted_count += 1
                     logging.info("✓ Article ID %s posted successfully!", article_id)
-
+                    
+                    # Минимизируем окно перед закрытием
                     minimize_profile_window(profile_no)
                     time.sleep(1)
-
+                    
+                    # Закрываем профиль после успешного постинга и сохранения ссылки
                     logging.info("Closing profile after successful post...")
                     close_profile(profile_id)
-
+                    
+                    # Небольшая пауза после закрытия профиля
                     time.sleep(2)
                 else:
                     failed_count += 1
                     logging.error("✗ Failed to post article ID %s", article_id)
+                    
+                    # Минимизируем окно даже при ошибке
                     minimize_profile_window(profile_no)
-
+                    
+                    # Не закрываем профиль при ошибке, чтобы можно было проверить проблему
+                
             except Exception as e:
                 logging.error("Error during posting process: %s", e, exc_info=True)
                 failed_count += 1
+                # Минимизируем окно при ошибке
                 minimize_profile_window(profile_no)
-
+                # Не закрываем профиль при ошибке
+            
+            # Пауза перед следующим профилем (если это не последняя статья)
             if article != unpublished_articles[-1]:
                 pause_time = random_delay(5.0, 10.0)
                 logging.info("Waiting %.2f seconds before next article...", pause_time)
                 time.sleep(pause_time)
-
+        
         logging.info("")
         logging.info("="*60)
         logging.info("Posting completed!")
         logging.info("  Posted: %d", posted_count)
         logging.info("  Failed: %d", failed_count)
         logging.info("="*60)
-
+        
     except KeyboardInterrupt:
         logging.warning("Interrupted by user")
     except Exception as e:
@@ -1595,3 +1487,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
