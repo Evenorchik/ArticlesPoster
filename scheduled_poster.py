@@ -42,13 +42,8 @@ logging.basicConfig(
 
 # Константы
 GMT_MINUS_5 = pytz.timezone('America/New_York')  # GMT-5 (EST/EDT)
-<<<<<<< HEAD
-POSTING_START_HOUR = 00.1   # 19:30 (19 + 30/60 = 19.5)
-POSTING_END_HOUR = 02.0   # 20:20 (20 + 20/60 = 20.333...)
-=======
 POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
 POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
->>>>>>> d48d2828e08feb87b16238a540b3a9a9fb11a464
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
 
