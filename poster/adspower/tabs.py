@@ -250,6 +250,27 @@ class TabManager:
             except Exception:
                 pass
 
+            # 8) КРИТИЧНО: После открытия Medium вкладки снова максимизируем окно
+            # (после переключения вкладок окно может потерять максимизацию)
+            logging.info("Ensuring window is maximized after Medium tab switch...")
+            ui.sleep(0.5)  # Даем время на переключение вкладки
+            if not window_manager.focus(profile):
+                logging.warning("⚠ Failed to re-maximize window after Medium tab switch, but continuing...")
+            else:
+                logging.info("✓ Window re-maximized after Medium tab switch")
+            ui.sleep(0.5)
+
+            # 9) Проверяем, что мы на правильной странице Medium
+            try:
+                current_url = driver.current_url
+                if 'medium.com' not in current_url.lower() or 'new-story' not in current_url.lower():
+                    logging.warning("⚠ Not on Medium new-story page, navigating...")
+                    driver.get(self.MEDIUM_NEW_STORY_URL)
+                    wait_document_ready(driver, timeout_s=30)
+                    ui.sleep(0.5)
+            except Exception as e:
+                logging.warning("⚠ Error checking Medium URL: %s", e)
+
             # В этот момент активная вкладка на экране — Medium (мы её только что открывали).
             logging.info(
                 "✓ Medium tab ready & active. Handle=%s URL=%s",
@@ -263,6 +284,15 @@ class TabManager:
             )
             from poster.timing import wait_with_log
             wait_with_log(wait_after_open, "Page load wait", 10.0)
+            
+            # 10) Финальная проверка максимизации перед возвратом
+            logging.info("Final window maximization check...")
+            ui.sleep(0.3)
+            if not window_manager.focus(profile):
+                logging.warning("⚠ Final maximization check failed, but continuing...")
+            else:
+                logging.info("✓ Window confirmed maximized")
+            
             return True
 
         except Exception as e:

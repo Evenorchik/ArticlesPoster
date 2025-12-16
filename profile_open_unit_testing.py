@@ -169,9 +169,24 @@ def test_single_profile(
             pass
         return False
     
-    # Шаг 3.5: Скриншот через 10 секунд после открытия Medium вкладки
+    # Шаг 3.5: Проверка максимизации окна после открытия Medium
     logging.info("")
-    logging.info("STEP 3.5: Waiting %d seconds before taking screenshot...", SCREENSHOT_DELAY_SEC)
+    logging.info("STEP 3.5: Verifying window is maximized after Medium tab opened...")
+    try:
+        if not window_manager.focus(profile):
+            logging.warning("⚠ Window may not be maximized, attempting to maximize again...")
+            # Пробуем еще раз с небольшой задержкой
+            time.sleep(0.5)
+            window_manager.focus(profile)
+        else:
+            logging.info("✓ Window confirmed maximized")
+        time.sleep(MIN_PAUSE_BETWEEN_ACTIONS)
+    except Exception as e:
+        logging.warning("⚠ Error verifying window maximization: %s", e)
+    
+    # Шаг 3.6: Скриншот через 10 секунд после открытия Medium вкладки
+    logging.info("")
+    logging.info("STEP 3.6: Waiting %d seconds before taking screenshot...", SCREENSHOT_DELAY_SEC)
     time.sleep(SCREENSHOT_DELAY_SEC)
     logging.info("Taking screenshot of the screen...")
     screenshot_path = take_screenshot(sequential_no, profile_no)
@@ -187,19 +202,30 @@ def test_single_profile(
     time.sleep(PROFILE_START_WAIT_SEC)
     logging.info("✓ Wait completed")
     
-    # Шаг 5: Проверка состояния
+    # Шаг 5: Проверка состояния и максимизации
     logging.info("")
-    logging.info("STEP 5: Verifying profile state...")
+    logging.info("STEP 5: Verifying profile state and window maximization...")
     try:
+        # Проверка URL
         if profile.driver:
             current_url = profile.driver.current_url
             logging.info("  Current URL: %s", current_url)
-            if 'medium.com' in current_url.lower():
-                logging.info("✓ Profile is on Medium page")
+            if 'medium.com' in current_url.lower() and 'new-story' in current_url.lower():
+                logging.info("✓ Profile is on Medium new-story page")
+            elif 'medium.com' in current_url.lower():
+                logging.warning("⚠ Profile is on Medium but not on new-story page (URL: %s)", current_url)
             else:
                 logging.warning("⚠ Profile is not on Medium page (URL: %s)", current_url)
         else:
             logging.warning("⚠ Driver not available for verification")
+        
+        # Финальная проверка максимизации
+        logging.info("  Final window maximization check...")
+        if not window_manager.focus(profile):
+            logging.warning("⚠ Final maximization check failed")
+        else:
+            logging.info("✓ Window confirmed maximized in final check")
+        
         time.sleep(MIN_PAUSE_BETWEEN_ACTIONS)
     except Exception as e:
         logging.warning("⚠ Error verifying profile state: %s", e)

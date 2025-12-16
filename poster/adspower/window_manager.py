@@ -69,11 +69,33 @@ class WindowManager:
                 pass
 
             try:
+                # Проверяем, не минимизировано ли окно
+                if getattr(win, "isMinimized", False):
+                    win.restore()
+                    time.sleep(0.2)
+                
+                # Активируем окно перед максимизацией
+                win.activate()
+                time.sleep(0.15)
+                
+                # Максимизируем окно
                 win.maximize()
-                time.sleep(0.2)
-            except Exception:
-                # уже максимизировано или maximize не поддержан — не критично
-                pass
+                time.sleep(0.3)  # Увеличиваем паузу для надежности
+                
+                # Проверяем, что окно действительно максимизировано
+                if hasattr(win, "isMaximized"):
+                    if not win.isMaximized:
+                        logging.warning("Window %d may not be maximized, trying again...", profile.profile_no)
+                        win.maximize()
+                        time.sleep(0.2)
+            except Exception as e:
+                logging.warning("Error during maximize (may already be maximized): %s", e)
+                # Пытаемся хотя бы активировать окно
+                try:
+                    win.activate()
+                    time.sleep(0.2)
+                except Exception:
+                    pass
 
             logging.info("✓ Profile %d window focused and maximized: %s", profile.profile_no, win.title)
             return True
