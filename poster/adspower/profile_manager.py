@@ -90,6 +90,13 @@ class ProfileManager:
         selenium_address = info.ws_selenium
         webdriver_path = info.webdriver_path
 
+        # Сохраним debuggerAddress и webdriver_path в профиль (для WindowManager)
+        try:
+            setattr(profile, "selenium_address", selenium_address)
+            setattr(profile, "webdriver_path", webdriver_path)
+        except Exception:
+            pass
+
         # 3) Attach selenium
         driver = attach_driver(selenium_address, webdriver_path)
         if not driver:
