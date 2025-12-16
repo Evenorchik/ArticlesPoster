@@ -1,120 +1,124 @@
 """
-Менеджер профилей Ads Power.
+poster.adspower.profile_manager
+
+Единая точка подготовки профиля:
+- гарантировать Active+ws.selenium+webdriver
+- attach selenium
+- создать tag tab (стабильный title)
 """
+from __future__ import annotations
+
 import logging
-from typing import Optional, Dict
+import time
+import uuid
+from typing import Dict, Optional
+
 from poster.models import Profile
-from poster.settings import get_profile_id, get_profile_no
+from poster.settings import get_profile_id
+
 from poster.adspower.api_client import AdsPowerApiClient
 from poster.adspower.selenium_attach import attach_driver, SELENIUM_AVAILABLE
 from poster.adspower.tabs import ensure_tag_tab
 
 
 class ProfileManager:
-    """Менеджер для управления профилями Ads Power."""
-    
+    """Менеджер для управления профилями AdsPower (кэширует Profile объекты)."""
+
     def __init__(self, api_client: Optional[AdsPowerApiClient] = None):
         self.api_client = api_client or AdsPowerApiClient()
         self.profiles: Dict[int, Profile] = {}
-    
+
     def ensure_ready(self, profile_no: int) -> Optional[Profile]:
         """
-        ЕДИНАЯ точка подготовки профиля:
-        - если профиль закрыт/не Active: стартуем через API и ждём Active + ws.selenium + webdriver
-        - подключаем Selenium к уже запущенному профилю
-        - создаём/поддерживаем вкладку-ярлык (tag tab) для стабильного фокуса окна
+        Подготовить профиль: Active + attach selenium + tag tab.
+        Возвращает Profile с заполненным driver.
         """
         if not SELENIUM_AVAILABLE:
-            logging.error("Selenium not available! Install with: pip install selenium")
+            logging.error("Selenium not available! Install selenium>=4.")
             return None
 
         if profile_no not in self.profiles:
             profile_id = get_profile_id(profile_no)
             if not profile_id:
-                logging.error("Profile No %d not found in PROFILE_MAPPING", profile_no)
+                logging.error("Profile No %d not found in mapping", profile_no)
                 return None
             self.profiles[profile_no] = Profile(profile_no=profile_no, profile_id=profile_id)
 
         profile = self.profiles[profile_no]
 
-        # Если driver уже жив — просто проверим/восстановим tag tab
-        if profile.driver:
+        # Убедимся, что window_tag достаточно уникален (если в модели он "простенький")
+        try:
+            if not getattr(profile, "window_tag", ""):
+                profile.window_tag = f"ADS_PROFILE_{profile_no}_{uuid.uuid4().hex[:6]}"
+        except Exception:
+            pass
+
+        # Если driver уже жив — проверим что он отвечает, и обновим tag tab
+        if getattr(profile, "driver", None):
             try:
-                _ = profile.driver.current_url
+                _ = profile.driver.window_handles
                 ensure_tag_tab(profile)
                 return profile
             except Exception:
+                try:
+                    profile.driver.quit()
+                except Exception:
+                    pass
                 profile.driver = None
                 profile.tag_window_handle = None
+                profile.medium_window_handle = None
 
-        # 1) Гарантируем Active + наличие ws.selenium/webdriver
-        profile_status = self.api_client.get_active(profile.profile_id)
-        ws = (profile_status or {}).get("ws") or {}
-        status = (profile_status or {}).get("status")
-        selenium_ok = bool(ws.get("selenium"))
-        webdriver_ok = bool((profile_status or {}).get("webdriver"))
-
-        if status != "Active" or not selenium_ok or not webdriver_ok:
-            logging.info("Profile %d (ID: %s) is not ready/Active, starting via API...", profile_no, profile.profile_id)
+        # 1) Ждём готовности через API
+        info = self.api_client.get_active_info(profile.profile_id)
+        if not info or not info.ready_for_selenium:
+            logging.info("Profile %d (id=%s) not ready, starting...", profile_no, profile.profile_id)
             if not self.api_client.start(profile.profile_id):
                 return None
-            profile_status = self.api_client.wait_active(profile.profile_id, timeout_s=120, poll_s=3.0)
-            if not profile_status:
+            info = self.api_client.wait_active_info(profile.profile_id, timeout_s=150, poll_s=3.0)
+            if not info:
                 return None
 
-        # Иногда Active есть, но ws/webdriver приезжают позже
-        ws = (profile_status or {}).get("ws") or {}
-        selenium_address = ws.get("selenium") or ""
-        webdriver_path = (profile_status or {}).get("webdriver") or ""
-        if not selenium_address or not webdriver_path:
-            profile_status = self.api_client.wait_active(profile.profile_id, timeout_s=60, poll_s=2.0)
-            if not profile_status:
-                return None
-            ws = (profile_status or {}).get("ws") or {}
-            selenium_address = ws.get("selenium") or ""
-            webdriver_path = (profile_status or {}).get("webdriver") or ""
+        # 2) Запомним pid если есть (опционально) – пригодится для WindowManager
+        try:
+            for k in ("pid", "browser_pid", "process_id"):
+                if k in (info.raw or {}) and info.raw.get(k):
+                    setattr(profile, "pid", info.raw.get(k))
+                    break
+        except Exception:
+            pass
 
-        if not selenium_address or not webdriver_path:
-            logging.error("Missing selenium address or webdriver path for profile %d", profile_no)
-            return None
+        selenium_address = info.ws_selenium
+        webdriver_path = info.webdriver_path
 
-        # 2) Подключаем Selenium к профилю
+        # 3) Attach selenium
         driver = attach_driver(selenium_address, webdriver_path)
         if not driver:
             return None
 
         profile.driver = driver
 
-        # 3) Создаём tag-tab для стабильного поиска/фокуса окна
+        # 4) Создаём tag tab – НЕ ломая вкладки
         ensure_tag_tab(profile)
 
-        logging.info(
-            "✓ Profile %d (ID: %s) ready with window_tag: %s",
-            profile_no, profile.profile_id, profile.window_tag
-        )
+        logging.info("✓ Profile %d ready (id=%s, tag=%s)", profile_no, profile.profile_id, getattr(profile, "window_tag", ""))
         return profile
-    
-    def get(self, profile_no: int) -> Optional[Profile]:
-        """Получить профиль по номеру."""
-        return self.profiles.get(profile_no)
-    
-    def close(self, profile_no: int) -> bool:
-        """Закрыть профиль."""
-        if profile_no not in self.profiles:
-            return False
-        
-        profile = self.profiles[profile_no]
-        success = self.api_client.stop(profile.profile_id)
-        
-        if success:
-            if profile.driver:
-                try:
-                    profile.driver.quit()
-                except Exception as e:
-                    logging.debug("Error quitting driver for profile %d: %s", profile_no, e)
-                profile.driver = None
-            profile.medium_window_handle = None
-            profile.tag_window_handle = None
-        
-        return success
 
+    def get(self, profile_no: int) -> Optional[Profile]:
+        return self.profiles.get(profile_no)
+
+    def close(self, profile_no: int) -> bool:
+        """Остановить профиль через API и закрыть driver."""
+        profile = self.profiles.get(profile_no)
+        if not profile:
+            return False
+
+        ok = self.api_client.stop(profile.profile_id)
+        if ok and getattr(profile, "driver", None):
+            try:
+                profile.driver.quit()
+            except Exception:
+                pass
+            profile.driver = None
+        profile.medium_window_handle = None
+        profile.tag_window_handle = None
+        return ok

@@ -1,135 +1,208 @@
 """
-Управление вкладками браузера (tag-tab, Medium tab).
+poster.adspower.tabs
+
+Управление вкладками:
+- tag tab (стабильный title, чтобы находить окно)
+- вкладка Medium new-story
+
+Ключевой принцип: НИКОГДА не "перезаписывать" существующую вкладку через driver.get("about:blank").
+Tag tab создаётся как отдельная вкладка.
 """
-import time
+from __future__ import annotations
+
 import logging
-from typing import Optional
+import time
+from typing import Optional, Iterable, Set, Tuple
+
 from poster.models import Profile
 from poster.settings import MEDIUM_NEW_STORY_URL
 
 
-def safe_switch_to(driver, handle: str) -> bool:
-    """Безопасно переключиться на window handle (вкладку)."""
+def safe_switch_to(driver, handle: str, retries: int = 3, sleep_s: float = 0.15) -> bool:
+    """Безопасно переключиться на вкладку по handle с ретраями."""
+    for _ in range(max(1, retries)):
+        try:
+            driver.switch_to.window(handle)
+            return True
+        except Exception:
+            time.sleep(sleep_s)
+    return False
+
+
+def _wait_new_handle(driver, before: Set[str], timeout_s: float = 6.0) -> Optional[str]:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            now = list(driver.window_handles or [])
+        except Exception:
+            now = []
+        diff = [h for h in now if h not in before]
+        if diff:
+            return diff[-1]
+        time.sleep(0.15)
+    return None
+
+
+def _create_new_tab(driver, url: str = "about:blank") -> Optional[str]:
+    """
+    Создать новую вкладку максимально надёжно.
+    Порядок: CDP Target.createTarget -> switch_to.new_window -> window.open.
+    """
+    before = set(driver.window_handles or [])
+
+    # 1) CDP (самый надёжный при attach через debuggerAddress)
     try:
-        driver.switch_to.window(handle)
+        driver.execute_cdp_cmd("Target.createTarget", {"url": url})
+        h = _wait_new_handle(driver, before, timeout_s=6.0)
+        if h:
+            return h
+    except Exception:
+        pass
+
+    # 2) Selenium new_window (в AdsPower иногда ломается, но как fallback ок)
+    try:
+        driver.switch_to.new_window("tab")
+        try:
+            driver.get(url)
+        except Exception:
+            pass
+        return driver.current_window_handle
+    except Exception:
+        pass
+
+    # 3) JS window.open
+    try:
+        driver.execute_script("window.open(arguments[0], '_blank');", url)
+        h = _wait_new_handle(driver, before, timeout_s=6.0)
+        if h:
+            return h
+    except Exception:
+        pass
+
+    return None
+
+
+def ensure_tag_tab(profile: Profile) -> bool:
+    """
+    Гарантирует наличие отдельной tag-вкладки:
+    - about:blank
+    - document.title == profile.window_tag
+    """
+    driver = getattr(profile, "driver", None)
+    if not driver:
+        return False
+
+    # 0) Если tag handle уже есть и жив — просто проверим/обновим title
+    try:
+        handles = list(driver.window_handles or [])
+    except Exception:
+        handles = []
+    if not handles:
+        return False
+
+    if getattr(profile, "tag_window_handle", None) in handles:
+        if safe_switch_to(driver, profile.tag_window_handle):
+            try:
+                # Не навигируем! Только title.
+                driver.execute_script("document.title = arguments[0];", profile.window_tag)
+                # Убедимся, что это действительно 'about:blank' (по желанию), но не ломаем если другое
+                profile.tag_window_handle = driver.current_window_handle
+                return True
+            except Exception:
+                # Если не получилось — пересоздадим
+                profile.tag_window_handle = None
+
+    # 1) Создаём отдельную вкладку
+    try:
+        new_handle = _create_new_tab(driver, url="about:blank")
+        if not new_handle:
+            return False
+        if not safe_switch_to(driver, new_handle):
+            return False
+
+        try:
+            driver.execute_script("document.title = arguments[0];", profile.window_tag)
+        except Exception:
+            return False
+
+        profile.tag_window_handle = new_handle
         return True
     except Exception:
         return False
 
 
-def ensure_tag_tab(profile: Profile) -> bool:
+def find_existing_medium_tab(profile: Profile) -> Optional[str]:
     """
-    Гарантирует наличие отдельной вкладки-ярлыка (about:blank) с document.title == profile.window_tag.
-    
-    Зачем:
-    - pygetwindow ищет окно по заголовку активной вкладки. Medium часто меняет title, поэтому держим стабильный tag.
-    - Для фокуса окна можно временно активировать tag-вкладку, сфокусировать окно, и вернуть Medium.
+    Ищет вкладку Medium, предпочитая /new-story.
     """
-    if not getattr(profile, "driver", None):
-        return False
+    driver = getattr(profile, "driver", None)
+    if not driver:
+        return None
 
-    driver = profile.driver
     try:
         handles = list(driver.window_handles or [])
-        if not handles:
-            return False
+    except Exception:
+        return None
 
-        def _try_make_tag(handle: str) -> bool:
-            try:
-                if not safe_switch_to(driver, handle):
-                    return False
-                try:
-                    driver.get("about:blank")
-                except Exception:
-                    return False
-                try:
-                    driver.execute_script("document.title = arguments[0];", profile.window_tag)
-                except Exception:
-                    return False
-                profile.tag_window_handle = driver.current_window_handle
-                return True
-            except Exception:
-                return False
-
-        # 1) Если tag handle уже известен и жив — просто обновим title
-        if profile.tag_window_handle and profile.tag_window_handle in handles:
-            if _try_make_tag(profile.tag_window_handle):
-                return True
-            profile.tag_window_handle = None
-
-        # 2) Пробуем любую вкладку, кроме Medium (если известна)
-        for h in handles:
-            if profile.medium_window_handle and h == profile.medium_window_handle:
-                continue
-            if _try_make_tag(h):
-                return True
-
-        # 3) На крайний случай — текущую вкладку
+    best = None
+    fallback = None
+    for h in handles:
+        if not safe_switch_to(driver, h):
+            continue
         try:
-            current = driver.current_window_handle
+            url = (driver.current_url or "").lower()
         except Exception:
-            current = handles[0]
-        return _try_make_tag(current)
+            continue
 
-    except Exception:
-        return False
+        if "medium.com/new-story" in url:
+            best = h
+            break
+        if "medium.com" in url and not fallback:
+            fallback = h
 
-
-def find_existing_medium_tab(profile: Profile) -> Optional[str]:
-    """Ищет уже открытую вкладку Medium в этом профиле (по URL)."""
-    if not getattr(profile, "driver", None):
-        return None
-    driver = profile.driver
-    try:
-        for h in driver.window_handles or []:
-            try:
-                driver.switch_to.window(h)
-                url = (driver.current_url or "").lower()
-                if "medium.com" in url:
-                    return h
-            except Exception:
-                continue
-    except Exception:
-        return None
-    return None
+    return best or fallback
 
 
 def find_window_by_tag(profile: Profile) -> Optional[str]:
-    """Находит window handle вкладки, где title содержит window_tag."""
-    if not profile.driver:
+    """
+    Находит handle вкладки, которую можно безопасно сделать активной для фокуса окна:
+    - сначала tag tab
+    - затем вкладка где title содержит window_tag
+    - затем medium handle
+    - затем первая вкладка
+    """
+    driver = getattr(profile, "driver", None)
+    if not driver:
         return None
 
     try:
-        handles = profile.driver.window_handles or []
-        if not handles:
-            return None
-
-        # 1) Сначала tag-tab, если есть
-        if profile.tag_window_handle and profile.tag_window_handle in handles:
-            return profile.tag_window_handle
-
-        # 2) Ищем по title
-        for h in handles:
-            try:
-                profile.driver.switch_to.window(h)
-                title = profile.driver.title or ""
-                if profile.window_tag in title:
-                    return h
-            except Exception:
-                continue
-
-        # 3) Иначе Medium handle
-        if profile.medium_window_handle and profile.medium_window_handle in handles:
-            return profile.medium_window_handle
-
-        return handles[0]
-    except Exception as e:
-        logging.error("Error finding window by tag: %s", e)
+        handles = list(driver.window_handles or [])
+    except Exception:
         return None
+    if not handles:
+        return None
+
+    if getattr(profile, "tag_window_handle", None) in handles:
+        return profile.tag_window_handle
+
+    for h in handles:
+        if not safe_switch_to(driver, h):
+            continue
+        try:
+            title = driver.title or ""
+        except Exception:
+            title = ""
+        if getattr(profile, "window_tag", "") and profile.window_tag in title:
+            return h
+
+    if getattr(profile, "medium_window_handle", None) in handles:
+        return profile.medium_window_handle
+
+    return handles[0]
 
 
 def wait_document_ready(driver, timeout_s: int = 30) -> bool:
-    """Ждать готовности документа."""
+    """Ждать document.readyState == complete."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
@@ -143,159 +216,117 @@ def wait_document_ready(driver, timeout_s: int = 30) -> bool:
 
 
 class TabManager:
-    """Менеджер для управления вкладками браузера."""
-    
-    def __init__(self):
-        from poster.settings import MEDIUM_NEW_STORY_URL
-        self.MEDIUM_NEW_STORY_URL = MEDIUM_NEW_STORY_URL
-    
+    """
+    Важно: этот менеджер может работать и без UI, чисто через Selenium/CDP.
+    UI (pyautogui) используется только как fallback, если создание вкладки Selenium/CDP не сработало.
+    """
+
+    def __init__(self, medium_new_story_url: str = MEDIUM_NEW_STORY_URL):
+        self.MEDIUM_NEW_STORY_URL = medium_new_story_url
+
     def ensure_medium_tab_open(
         self,
         profile: Profile,
-        ui,
-        window_manager,
-        wait_after_open: float = 15.0
+        ui=None,
+        window_manager=None,
+        wait_after_open: float = 3.0,
     ) -> bool:
         """
-        Гарантирует активную вкладку Medium (new-story) так, чтобы PyAutoGUI мог работать.
-        
-        Важно:
-        - НЕ используем `driver.switch_to.new_window()` и `window.open()` — в AdsPower это
-          периодически падает (no such window) и/или блокируется расширениями (LavaMoat).
-        - Открываем новую вкладку через PyAutoGUI (Ctrl+T) уже в сфокусированном окне.
+        Гарантирует, что:
+        - существует вкладка Medium /new-story
+        - она активна (driver.switch_to.window на нужный handle)
+        - окно (опционально) вынесено на передний план и максимизировано
         """
-        if not profile.driver:
-            logging.error("Driver not available for profile %d", profile.profile_no)
+        driver = getattr(profile, "driver", None)
+        if not driver:
+            logging.error("TabManager: no driver for profile %s", getattr(profile, "profile_no", "?"))
             return False
 
-        driver = profile.driver
+        # 1) Tag tab нужен только для надёжного фокуса окна (window title стабилен)
+        ensure_tag_tab(profile)
 
-        try:
-            # 1) Стабильный title для поиска окна через pygetwindow
-            ensure_tag_tab(profile)
-
-            # 2) Активируем tag-tab (чтобы заголовок окна точно был window_tag) и фокусируем окно
-            if profile.tag_window_handle:
-                safe_switch_to(driver, profile.tag_window_handle)
-                ui.sleep(0.2)
-
-            if not window_manager.focus(profile):
-                logging.warning("Failed to focus/maximize window (continuing anyway)...")
-
-            ui.sleep(0.2)
-
-            # 3) Открываем новую вкладку Medium ЧЕРЕЗ PyAutoGUI
-            handles_before = set(driver.window_handles or [])
-
-            try:
-                # Новая вкладка становится активной
-                ui.hotkey('ctrl', 't')
-                ui.sleep(0.35)
-
-                # Вставляем URL через буфер (быстрее и надёжнее)
-                import pyperclip
-                pyperclip.copy(self.MEDIUM_NEW_STORY_URL)
-                ui.sleep(0.1)
-                ui.hotkey('ctrl', 'l')
-                ui.sleep(0.05)
-                ui.hotkey('ctrl', 'v')
-                ui.sleep(0.05)
-                ui.press('enter')
-            except Exception as e:
-                logging.error("Failed to open Medium tab via PyAutoGUI: %s", e)
-                return False
-
-            # 4) Ждём, пока Selenium увидит новую вкладку (handle)
-            new_handle = None
-            deadline = time.time() + 8.0
-            while time.time() < deadline:
-                handles_now = list(driver.window_handles or [])
-                diff = [h for h in handles_now if h not in handles_before]
-                if diff:
-                    new_handle = diff[-1]
-                    break
-                ui.sleep(0.2)
-
-            # 5) Если handle не появился, попробуем найти вкладку Medium по URL
-            if not new_handle:
-                found = find_existing_medium_tab(profile)
-                if found:
-                    new_handle = found
-
-            if new_handle:
-                safe_switch_to(driver, new_handle)
-                profile.medium_window_handle = new_handle
-            else:
-                # Фоллбек: используем текущую вкладку драйвера
+        # 2) Пытаемся найти уже открытую Medium вкладку
+        h = find_existing_medium_tab(profile)
+        if h:
+            safe_switch_to(driver, h)
+            profile.medium_window_handle = h
+        else:
+            # 3) Создаём новую вкладку под Medium (желательно CDP)
+            created = _create_new_tab(driver, url="about:blank")
+            if created:
+                safe_switch_to(driver, created)
                 try:
-                    profile.medium_window_handle = driver.current_window_handle
+                    driver.get(self.MEDIUM_NEW_STORY_URL)
+                except Exception:
+                    pass
+                wait_document_ready(driver, timeout_s=30)
+                profile.medium_window_handle = created
+            else:
+                # 4) Fallback на UI (только если передали ui + window_manager)
+                if not (ui and window_manager):
+                    logging.error("TabManager: cannot create tab via Selenium/CDP and no UI fallback provided")
+                    return False
+
+                # сделаем tag активным -> фокус -> ctrl+t -> URL
+                if getattr(profile, "tag_window_handle", None):
+                    safe_switch_to(driver, profile.tag_window_handle)
+                    time.sleep(0.2)
+
+                try:
+                    window_manager.focus(profile)
                 except Exception:
                     pass
 
-            # 6) Усиливаем: навигация Selenium (если PyAutoGUI открыло что-то не то)
-            try:
-                driver.get(self.MEDIUM_NEW_STORY_URL)
-            except Exception:
-                pass
+                handles_before = set(driver.window_handles or [])
+                try:
+                    ui.hotkey("ctrl", "t")
+                    ui.sleep(0.35)
+                    ui.hotkey("ctrl", "l")
+                    ui.sleep(0.05)
+                    # предполагаем, что ui умеет вставлять через clipboard внутри себя
+                    if hasattr(ui, "paste_text"):
+                        ui.paste_text(self.MEDIUM_NEW_STORY_URL)
+                    else:
+                        # fallback: печать (хуже, но лучше чем ничего)
+                        ui.write(self.MEDIUM_NEW_STORY_URL)
+                    ui.sleep(0.05)
+                    ui.press("enter")
+                except Exception as e:
+                    logging.error("TabManager UI fallback failed: %s", e)
+                    return False
 
-            wait_document_ready(driver, timeout_s=30)
-            ui.sleep(0.25)
+                new_h = _wait_new_handle(driver, handles_before, timeout_s=8.0)
+                if new_h:
+                    safe_switch_to(driver, new_h)
+                    profile.medium_window_handle = new_h
+                else:
+                    # Попробуем найти по URL
+                    h2 = find_existing_medium_tab(profile)
+                    if h2:
+                        safe_switch_to(driver, h2)
+                        profile.medium_window_handle = h2
+                    else:
+                        profile.medium_window_handle = driver.current_window_handle
 
-            # 7) Подмешаем tag в title (иногда помогает, но не полагаемся)
-            try:
-                driver.execute_script(
-                    "document.title = arguments[0] + ' | ' + (document.title || 'Medium');",
-                    profile.window_tag
-                )
-            except Exception:
-                pass
-
-            # 8) КРИТИЧНО: После открытия Medium вкладки снова максимизируем окно
-            # (после переключения вкладок окно может потерять максимизацию)
-            logging.info("Ensuring window is maximized after Medium tab switch...")
-            ui.sleep(0.5)  # Даем время на переключение вкладки
-            if not window_manager.focus(profile):
-                logging.warning("⚠ Failed to re-maximize window after Medium tab switch, but continuing...")
-            else:
-                logging.info("✓ Window re-maximized after Medium tab switch")
-            ui.sleep(0.5)
-
-            # 9) Проверяем, что мы на правильной странице Medium
-            try:
-                current_url = driver.current_url
-                if 'medium.com' not in current_url.lower() or 'new-story' not in current_url.lower():
-                    logging.warning("⚠ Not on Medium new-story page, navigating...")
+                # Усилим навигацией Selenium
+                try:
                     driver.get(self.MEDIUM_NEW_STORY_URL)
-                    wait_document_ready(driver, timeout_s=30)
-                    ui.sleep(0.5)
-            except Exception as e:
-                logging.warning("⚠ Error checking Medium URL: %s", e)
+                except Exception:
+                    pass
+                wait_document_ready(driver, timeout_s=30)
 
-            # В этот момент активная вкладка на экране — Medium (мы её только что открывали).
-            logging.info(
-                "✓ Medium tab ready & active. Handle=%s URL=%s",
-                getattr(profile, 'medium_window_handle', None),
-                getattr(driver, 'current_url', '')
-            )
+        # 5) Теперь можно нормально фокусировать/максимизировать окно, и убедиться что Medium активен
+        if window_manager:
+            try:
+                # Временный переход на tag (для стабильного title) -> focus -> обратно Medium
+                if getattr(profile, "tag_window_handle", None):
+                    safe_switch_to(driver, profile.tag_window_handle)
+                    time.sleep(0.2)
+                window_manager.focus(profile)
+            except Exception:
+                pass
 
-            logging.info(
-                "Waiting %.0f seconds for page to stabilize before starting PyAutoGUI cycle...",
-                wait_after_open
-            )
-            from poster.timing import wait_with_log
-            wait_with_log(wait_after_open, "Page load wait", 10.0)
-            
-            # 10) Финальная проверка максимизации перед возвратом
-            logging.info("Final window maximization check...")
-            ui.sleep(0.3)
-            if not window_manager.focus(profile):
-                logging.warning("⚠ Final maximization check failed, but continuing...")
-            else:
-                logging.info("✓ Window confirmed maximized")
-            
-            return True
-
-        except Exception as e:
-            logging.error("Failed to open Medium URL: %s", e, exc_info=True)
-            return False
-
+        if getattr(profile, "medium_window_handle", None):
+            safe_switch_to(driver, profile.medium_window_handle)
+        time.sleep(max(0.0, float(wait_after_open)))
+        return True

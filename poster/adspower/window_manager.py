@@ -1,145 +1,197 @@
 """
-Управление окнами ОС через pygetwindow.
+poster.adspower.window_manager
+
+Управление окном браузера. Основная цель:
+- вывести окно нужного профиля на передний план
+- восстановить (если minimised) и максимизировать
+
+Алгоритм:
+1) по возможности используем Win32 HWND через PID (если доступен pywin32)
+2) иначе – pygetwindow по title (стабилизируется tag-tab)
 """
-import time
+from __future__ import annotations
+
 import logging
+import time
 from typing import Optional
+
 from poster.models import Profile
 
 
 class WindowManager:
-    """Менеджер для работы с окнами браузера через pygetwindow."""
-    
+    """Менеджер для работы с окнами браузера."""
+
     def __init__(self):
+        # pygetwindow – удобный, но хрупкий
+        self.gw = None
         try:
-            import pygetwindow as gw
+            import pygetwindow as gw  # type: ignore
             self.gw = gw
-            self._available = True
-        except ImportError:
-            self._available = False
-            logging.error("pygetwindow not available")
-    
-    def focus(self, profile: Profile) -> bool:
-        """Безопасно фокусирует и максимизирует окно профиля."""
-        if not self._available:
-            return False
-        
-        from poster.adspower.tabs import ensure_tag_tab, safe_switch_to
-        
+        except Exception:
+            self.gw = None
+
+        # pywin32 – более низкоуровневый и надёжный
+        self._win32 = None
         try:
-            def _find():
-                wins = self.gw.getWindowsWithTitle(profile.window_tag)
-                if wins:
-                    return wins
-                for w in self.gw.getAllWindows():
-                    if profile.window_tag in (w.title or ""):
-                        return [w]
-                return []
+            import win32con  # type: ignore
+            import win32gui  # type: ignore
+            import win32process  # type: ignore
+            self._win32 = (win32con, win32gui, win32process)
+        except Exception:
+            self._win32 = None
 
-            windows = _find()
+    # -------------------------
+    # Win32 path (best effort)
+    # -------------------------
+    def _find_hwnd_by_pid(self, pid: int) -> Optional[int]:
+        if not self._win32:
+            return None
+        win32con, win32gui, win32process = self._win32
 
-            # Если не нашли — попробуем активировать tag tab и поискать ещё раз
-            if not windows and profile.driver:
-                try:
+        matches = []
+
+        def enum_handler(hwnd, _):
+            try:
+                _, wpid = win32process.GetWindowThreadProcessId(hwnd)
+                if wpid != pid:
+                    return
+                # Только видимые окна
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                title = win32gui.GetWindowText(hwnd) or ""
+                if title.strip():
+                    matches.append(hwnd)
+            except Exception:
+                return
+
+        try:
+            win32gui.EnumWindows(enum_handler, None)
+        except Exception:
+            return None
+
+        return matches[0] if matches else None
+
+    def _win32_focus_maximize(self, hwnd: int) -> bool:
+        if not self._win32:
+            return False
+        win32con, win32gui, _ = self._win32
+        try:
+            # restore if minimized, then bring to front, then maximize
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            time.sleep(0.05)
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+            time.sleep(0.05)
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+            time.sleep(0.1)
+            return True
+        except Exception as e:
+            logging.debug("win32_focus_maximize failed: %s", e)
+            return False
+
+    # -------------------------
+    # pygetwindow path
+    # -------------------------
+    def _find_pygetwindow(self, title_fragment: str):
+        if not self.gw:
+            return None
+        try:
+            wins = self.gw.getWindowsWithTitle(title_fragment) or []
+            if wins:
+                return wins[0]
+            for w in self.gw.getAllWindows() or []:
+                if title_fragment and title_fragment in (w.title or ""):
+                    return w
+        except Exception:
+            return None
+        return None
+
+    def focus(self, profile: Profile, retries: int = 6, sleep_s: float = 0.35) -> bool:
+        """
+        Вывести окно профиля на передний план и максимизировать.
+        Требует стабильного window_tag в заголовке активной вкладки (для pygetwindow),
+        поэтому рекомендуется перед вызовом активировать tag-tab.
+        """
+        tag = getattr(profile, "window_tag", "") or ""
+        pid = getattr(profile, "pid", None) or getattr(profile, "browser_pid", None)
+
+        # 1) Win32 по PID (если есть)
+        if pid and self._win32:
+            try:
+                hwnd = self._find_hwnd_by_pid(int(pid))
+                if hwnd:
+                    return self._win32_focus_maximize(hwnd)
+            except Exception:
+                pass
+
+        # 2) pygetwindow по заголовку (fallback)
+        if not self.gw:
+            logging.warning("WindowManager: pygetwindow not available and no win32 pid path.")
+            return False
+
+        from poster.adspower.tabs import ensure_tag_tab, safe_switch_to, find_window_by_tag
+
+        for attempt in range(max(1, retries)):
+            try:
+                # Подстрахуем title: если есть driver – активируем tag-tab
+                if getattr(profile, "driver", None):
                     ensure_tag_tab(profile)
-                    if profile.tag_window_handle:
-                        safe_switch_to(profile.driver, profile.tag_window_handle)
-                        time.sleep(0.2)  # дать ОС обновить заголовок
-                    windows = _find()
-                except Exception:
-                    windows = _find()
-
-            if not windows:
-                logging.warning("Window with tag '%s' not found for profile %d", profile.window_tag, profile.profile_no)
-                return False
-
-            win = windows[0]
-
-            try:
-                if getattr(win, "isMinimized", False):
-                    win.restore()
-                    time.sleep(0.15)
-            except Exception:
-                pass
-
-            try:
-                win.activate()
-                time.sleep(0.15)
-            except Exception:
-                pass
-
-            try:
-                # Проверяем, не минимизировано ли окно
-                if getattr(win, "isMinimized", False):
-                    win.restore()
-                    time.sleep(0.2)
-                
-                # Активируем окно перед максимизацией
-                win.activate()
-                time.sleep(0.15)
-                
-                # Максимизируем окно
-                win.maximize()
-                time.sleep(0.3)  # Увеличиваем паузу для надежности
-                
-                # Проверяем, что окно действительно максимизировано
-                if hasattr(win, "isMaximized"):
-                    if not win.isMaximized:
-                        logging.warning("Window %d may not be maximized, trying again...", profile.profile_no)
-                        win.maximize()
+                    h = find_window_by_tag(profile)
+                    if h:
+                        safe_switch_to(profile.driver, h)
                         time.sleep(0.2)
-            except Exception as e:
-                logging.warning("Error during maximize (may already be maximized): %s", e)
-                # Пытаемся хотя бы активировать окно
+
+                w = self._find_pygetwindow(tag)
+                if not w:
+                    time.sleep(sleep_s)
+                    continue
+
+                # restore/activate/maximize
                 try:
-                    win.activate()
-                    time.sleep(0.2)
+                    if getattr(w, "isMinimized", False):
+                        w.restore()
+                        time.sleep(0.1)
                 except Exception:
                     pass
 
-            logging.info("✓ Profile %d window focused and maximized: %s", profile.profile_no, win.title)
-            return True
-
-        except Exception as e:
-            logging.error("Error focusing window for profile %d: %s", profile.profile_no, e)
-            return False
-    
-    def minimize(self, profile: Profile) -> bool:
-        """Минимизировать окно профиля."""
-        if not self._available:
-            return False
-        
-        try:
-            def _find_windows():
-                wins = self.gw.getWindowsWithTitle(profile.window_tag)
-                if wins:
-                    return wins
-                for w in self.gw.getAllWindows():
-                    if profile.window_tag in (w.title or ""):
-                        return [w]
-                return []
-
-            windows = _find_windows()
-
-            # Если Medium активен и title не содержит tag — временно активируем tag-tab
-            if not windows and getattr(profile, "driver", None):
-                from poster.adspower.tabs import ensure_tag_tab, safe_switch_to
                 try:
-                    ensure_tag_tab(profile)
-                    if profile.tag_window_handle:
-                        safe_switch_to(profile.driver, profile.tag_window_handle)
-                        time.sleep(0.2)
-                    windows = _find_windows()
+                    w.activate()
                 except Exception:
-                    windows = _find_windows()
+                    pass
+                time.sleep(0.15)
 
-            if windows:
-                windows[0].minimize()
-                logging.debug("Profile %d window minimized", profile.profile_no)
+                try:
+                    w.maximize()
+                except Exception:
+                    pass
+                time.sleep(0.15)
+
+                # Вторая попытка activate (часто помогает)
+                try:
+                    w.activate()
+                except Exception:
+                    pass
+
+                # Проверка (не всегда доступно)
                 return True
+            except Exception as e:
+                logging.debug("WindowManager focus attempt %d failed: %s", attempt + 1, e)
+                time.sleep(sleep_s)
 
-            return False
-        except Exception as e:
-            logging.debug("Error minimizing window for profile %d: %s", profile.profile_no, e)
-            return False
+        return False
 
+    def minimize(self, profile: Profile) -> bool:
+        """Минимизировать окно профиля (best effort)."""
+        if not self.gw:
+            return False
+        tag = getattr(profile, "window_tag", "") or ""
+        w = self._find_pygetwindow(tag)
+        if not w:
+            return False
+        try:
+            w.minimize()
+            return True
+        except Exception:
+            return False
