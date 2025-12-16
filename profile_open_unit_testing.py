@@ -6,13 +6,17 @@
 - Подключение Selenium
 - Фокус и максимизация окна
 - Открытие Medium вкладки
+- Скриншот экрана через 10 секунд после открытия Medium
 - Закрытие профиля
 
 Проходит по всем 10 профилям последовательно с паузами.
 """
+import os
 import time
 import logging
+from datetime import datetime
 from typing import Optional
+import pyautogui
 from config import LOG_LEVEL
 
 from poster.settings import (
@@ -38,6 +42,43 @@ PROFILE_INTERVAL_SEC = 15  # Интервал между профилями (с�
 MEDIUM_LOAD_WAIT_SEC = 5  # Ожидание загрузки Medium после открытия вкладки (секунды)
 PROFILE_START_WAIT_SEC = 20  # Ожидание после открытия Medium вкладки на запуск профиля (секунды)
 MIN_PAUSE_BETWEEN_ACTIONS = 1  # Минимальная пауза между действиями (секунды)
+SCREENSHOT_DELAY_SEC = 10  # Задержка перед скриншотом после открытия Medium вкладки (секунды)
+SCREENSHOTS_BASE_DIR = "profile_screenshots"  # Базовая папка для скриншотов
+
+
+def take_screenshot(sequential_no: int, profile_no: int) -> Optional[str]:
+    """
+    Делает скриншот всего экрана и сохраняет в папку профиля.
+    
+    Args:
+        sequential_no: Порядковый номер профиля (1-10)
+        profile_no: Внутренний номер профиля
+    
+    Returns:
+        Путь к сохраненному скриншоту или None при ошибке
+    """
+    try:
+        # Создаем базовую папку для скриншотов
+        os.makedirs(SCREENSHOTS_BASE_DIR, exist_ok=True)
+        
+        # Создаем папку для конкретного профиля
+        profile_dir = os.path.join(SCREENSHOTS_BASE_DIR, f"profile_{sequential_no}_no_{profile_no}")
+        os.makedirs(profile_dir, exist_ok=True)
+        
+        # Генерируем имя файла с timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"screenshot_seq{sequential_no}_no{profile_no}_{timestamp}.png"
+        filepath = os.path.join(profile_dir, filename)
+        
+        # Делаем скриншот
+        screenshot = pyautogui.screenshot()
+        screenshot.save(filepath)
+        
+        logging.info("✓ Screenshot saved: %s", filepath)
+        return filepath
+    except Exception as e:
+        logging.error("✗ Error taking screenshot: %s", e, exc_info=True)
+        return None
 
 
 def test_single_profile(
@@ -128,6 +169,18 @@ def test_single_profile(
             pass
         return False
     
+    # Шаг 3.5: Скриншот через 10 секунд после открытия Medium вкладки
+    logging.info("")
+    logging.info("STEP 3.5: Waiting %d seconds before taking screenshot...", SCREENSHOT_DELAY_SEC)
+    time.sleep(SCREENSHOT_DELAY_SEC)
+    logging.info("Taking screenshot of the screen...")
+    screenshot_path = take_screenshot(sequential_no, profile_no)
+    if screenshot_path:
+        logging.info("✓ Screenshot completed and saved")
+    else:
+        logging.warning("⚠ Screenshot failed, but continuing...")
+    time.sleep(MIN_PAUSE_BETWEEN_ACTIONS)
+    
     # Шаг 4: Ожидание на запуск профиля (после открытия Medium вкладки)
     logging.info("")
     logging.info("STEP 4: Waiting %d seconds for profile to fully start...", PROFILE_START_WAIT_SEC)
@@ -185,6 +238,8 @@ def test_all_profiles():
     logging.info("  Medium load wait: %d seconds", MEDIUM_LOAD_WAIT_SEC)
     logging.info("  Profile start wait: %d seconds", PROFILE_START_WAIT_SEC)
     logging.info("  Min pause between actions: %d seconds", MIN_PAUSE_BETWEEN_ACTIONS)
+    logging.info("  Screenshot delay: %d seconds", SCREENSHOT_DELAY_SEC)
+    logging.info("  Screenshots directory: %s", SCREENSHOTS_BASE_DIR)
     logging.info("")
     
     if not PROFILE_SEQUENTIAL_MAPPING:
