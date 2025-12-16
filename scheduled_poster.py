@@ -337,12 +337,6 @@ def main():
             logging.warning("Only %d articles with is_link='yes' available (need %d)", 
                           len(articles_with_link), ARTICLES_WITH_LINK_COUNT)
         
-        # Отправляем уведомление о запуске автопостера
-        try:
-            notify_poster_started(len(profiles), total_articles, selected_table)
-        except Exception as e:
-            logging.warning("Failed to send Telegram notification about poster start: %s", e)
-        
         # Распределяем статьи по профилям
         # Важно: все 5 профилей должны постить, без пересечений
         # 4 профиля постит is_link='no', 1 профиль постит is_link='yes'
@@ -400,6 +394,12 @@ def main():
         if response == 'q':
             logging.info("Aborted by user")
             return
+        
+        # Отправляем уведомление о запуске автопостера после подтверждения
+        try:
+            notify_poster_started(selected_table, article_assignments)
+        except Exception as e:
+            logging.warning("Failed to send Telegram notification about poster start: %s", e)
         
         # Выполняем постинг по расписанию
         posted_count = 0
