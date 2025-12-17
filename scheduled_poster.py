@@ -9,6 +9,7 @@
 import time
 import logging
 import random
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 import pytz
@@ -41,7 +42,7 @@ from poster.models import Profile
 from poster.link_replacer import update_article_body_with_replaced_link
 from config import LOG_LEVEL, LOG_MODE
 from psycopg import sql
-from telegram_bot import notify_poster_started, notify_article_posted
+from telegram_bot import notify_poster_started, notify_article_posted, notify_posting_complete
 
 # Настройка логирования
 logging.basicConfig(
@@ -561,6 +562,7 @@ def main():
         # Выполняем постинг по расписанию
         posted_count = 0
         failed_count = 0
+        posted_articles_info = []  # Список для финального отчета
         
         for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
@@ -618,6 +620,27 @@ def main():
                     # Обновляем БД
                     update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                     posted_count += 1
+                    
+                    # Извлекаем ссылку из статьи, если is_link='yes'
+                    article_link = ''
+                    if is_link == 'yes':
+                        body = article.get('body', '') if isinstance(article, dict) else ''
+                        if body:
+                            # Ищем ссылку bonza.chat в тексте
+                            bonza_link_pattern = r'https://bonza\.chat/[^\s<>"]+'
+                            matches = re.findall(bonza_link_pattern, body)
+                            if matches:
+                                article_link = matches[0]  # Берем первую найденную ссылку
+                    
+                    # Сохраняем информацию для финального отчета
+                    posted_articles_info.append({
+                        'topic': article_topic,
+                        'profile_seq': seq_no,
+                        'profile_no': profile_no,
+                        'url': url,
+                        'has_link': (is_link == 'yes'),
+                        'article_link': article_link
+                    })
                     
                     # Сокращенное логирование (в режиме SUMMARY)
                     if LOG_MODE.upper() == "SUMMARY":
@@ -696,6 +719,13 @@ def main():
         logging.info("  Posted: %d", posted_count)
         logging.info("  Failed: %d", failed_count)
         logging.info("="*60)
+        
+        # Отправляем финальный отчет в Telegram
+        if posted_articles_info:
+            try:
+                notify_posting_complete(posted_articles_info)
+            except Exception as e:
+                logging.warning("Failed to send Telegram posting report: %s", e)
         
     except KeyboardInterrupt:
         logging.warning("Interrupted by user")

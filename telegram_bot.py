@@ -66,18 +66,28 @@ def notify_poster_started(table_name: str, article_assignments: List) -> bool:
     from datetime import datetime
     import pytz
     
-    GMT_MINUS_5 = pytz.timezone('America/New_York')
+    KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')
     
-    text = f"<b>Auto-poster started</b>\n\n"
-    text += f"Table: {table_name}\n"
-    text += f"Articles: {len(article_assignments)}\n\n"
-    text += f"<b>Posting schedule:</b>\n"
+    text = f"<b>🚀 Auto-poster started</b>\n\n"
+    text += f"📊 Table: {table_name}\n"
+    text += f"📝 Articles: {len(article_assignments)}\n\n"
+    text += f"<b>📅 Posting schedule:</b>\n\n"
     
     for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
-        article_topic = article.get('topic', 'N/A')[:40] if isinstance(article, dict) else 'N/A'
+        article_id = article.get('id') if isinstance(article, dict) else article[0]
+        article_topic = article.get('topic', 'N/A')[:50] if isinstance(article, dict) else 'N/A'
+        is_link = article.get('is_link', 'no') if isinstance(article, dict) else 'no'
         time_str = posting_time.strftime("%H:%M")
-        text += f"Profile Seq:{seq_no} (No:{profile_no}, ID:{profile_id}) → {time_str} GMT-5\n"
-        text += f"Article: {article_topic}\n\n"
+        
+        # Определяем, есть ли ссылка в статье
+        link_indicator = "🔗" if is_link == 'yes' else "📄"
+        
+        text += f"{link_indicator} <b>Profile Seq:{seq_no}</b> (No:{profile_no}) → <b>{time_str}</b> (Kiev time)\n"
+        text += f"   Article ID: {article_id}\n"
+        text += f"   Topic: {html.escape(article_topic)}\n"
+        if is_link == 'yes':
+            text += f"   ⚠️ <b>This article contains a link</b>\n"
+        text += "\n"
     
     return send_message(text)
 
@@ -128,6 +138,57 @@ def notify_article_posted(
         f"<b>Profile:</b> No {profile_no}, Seq {sequential_no}, ID {profile_id}\n"
         f"<b>URL:</b> {url}"
     )
+    
+    return send_message(text)
+
+
+def notify_posting_complete(posted_articles: List[dict]) -> bool:
+    """
+    Отправляет финальный отчет о запощенных статьях.
+    
+    Args:
+        posted_articles: Список словарей с информацией о запощенных статьях:
+            - topic: Тема статьи
+            - profile_seq: Sequential номер профиля
+            - profile_no: Номер профиля
+            - url: URL опубликованной статьи
+            - has_link: Есть ли в статье ссылка (is_link='yes')
+            - article_link: Ссылка из статьи (для is_link='yes')
+        
+    Returns:
+        True если успешно, False при ошибке
+    """
+    if not posted_articles:
+        text = "<b>📊 Posting Report</b>\n\n"
+        text += "❌ No articles were posted."
+        return send_message(text)
+    
+    text = f"<b>📊 Posting Report</b>\n\n"
+    text += f"✅ Successfully posted: {len(posted_articles)} article(s)\n\n"
+    text += f"<b>📝 Posted articles:</b>\n\n"
+    
+    for i, article_info in enumerate(posted_articles, 1):
+        topic = article_info.get('topic', 'N/A')
+        profile_seq = article_info.get('profile_seq', 'N/A')
+        profile_no = article_info.get('profile_no', 'N/A')
+        url = article_info.get('url', 'N/A')
+        has_link = article_info.get('has_link', False)
+        article_link = article_info.get('article_link', '')
+        
+        # Экранируем HTML
+        topic_escaped = html.escape(str(topic)[:60])
+        
+        text += f"<b>{i}. {topic_escaped}</b>\n"
+        text += f"   👤 Profile: Seq {profile_seq} (No {profile_no})\n"
+        text += f"   🔗 Article URL: {url}\n"
+        
+        # Если в статье есть ссылка, показываем её
+        if has_link and article_link:
+            text += f"   🔗 Link in article: {article_link}\n"
+        elif has_link:
+            text += f"   ⚠️ Article has link, but link not found in body\n"
+        
+        text += "\n"
     
     return send_message(text)
 

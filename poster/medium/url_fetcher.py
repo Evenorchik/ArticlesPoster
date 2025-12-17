@@ -10,18 +10,28 @@ from poster.adspower.tabs import safe_switch_to
 from poster.ui.interface import UiDriver
 
 
-def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None) -> Optional[str]:
+def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_after_publish: float = 5.0) -> Optional[str]:
     """
     Получить URL опубликованной статьи через Selenium.
     
     Args:
         profile: Профиль с подключенным driver
         ui: UI драйвер для fallback (опционально)
+        wait_after_publish: Задержка после публикации перед захватом URL (секунды)
     
     Returns:
         URL статьи или None
     """
     logging.info("STEP 10: Getting published article URL via Selenium...")
+    
+    # Ждем, пока URL изменится на финальный (не /edit или /new-story)
+    logging.info("  Waiting %.1f seconds for URL to update after publish...", wait_after_publish)
+    if ui:
+        ui.sleep(wait_after_publish)
+    else:
+        time.sleep(wait_after_publish)
+    
+    url = None
     try:
         if profile.driver and profile.medium_window_handle:
             try:
@@ -43,9 +53,47 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None) -> Opti
                         profile.driver.switch_to.window(all_windows[-1])
 
         if profile.driver:
-            url = profile.driver.current_url
-            logging.info("  ✓ URL retrieved via Selenium")
-            logging.info("  Retrieved URL: %s", url)
+            # Ждем, пока URL станет финальным (не содержит /edit или /new-story)
+            max_wait_time = 10.0  # Максимальное время ожидания
+            check_interval = 0.5  # Интервал проверки
+            waited = 0.0
+            
+            while waited < max_wait_time:
+                url = profile.driver.current_url
+                
+                # Проверяем, что URL не содержит /edit или /new-story
+                if url and 'medium.com' in url:
+                    if '/edit' not in url and '/new-story' not in url and '/@' in url:
+                        logging.info("  ✓ URL retrieved via Selenium (final URL)")
+                        logging.info("  Retrieved URL: %s", url)
+                        break
+                    else:
+                        logging.debug("  URL still contains /edit or /new-story, waiting... (current: %s)", url)
+                        if ui:
+                            ui.sleep(check_interval)
+                        else:
+                            time.sleep(check_interval)
+                        waited += check_interval
+                else:
+                    # Если URL еще не готов, ждем
+                    if ui:
+                        ui.sleep(check_interval)
+                    else:
+                        time.sleep(check_interval)
+                    waited += check_interval
+            
+            # Если после ожидания URL все еще содержит /edit, берем текущий URL
+            if waited >= max_wait_time:
+                url = profile.driver.current_url
+                if url and ('/edit' in url or '/new-story' in url):
+                    logging.warning("  ⚠ URL still contains /edit or /new-story after waiting, but using it anyway")
+                    logging.warning("  Retrieved URL: %s", url)
+                elif url:
+                    logging.info("  ✓ URL retrieved via Selenium")
+                    logging.info("  Retrieved URL: %s", url)
+                else:
+                    logging.error("  ✗ Failed to get URL from driver")
+                    url = None
         else:
             if ui:
                 logging.warning("  Driver not available, using PyAutoGUI fallback...")
