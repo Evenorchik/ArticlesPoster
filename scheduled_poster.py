@@ -52,8 +52,8 @@ logging.basicConfig(
 
 # Константы
 KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')  # Киевское время (UTC+2/UTC+3)
-POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
-POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
+POSTING_START_HOUR = 04.00   # 19:30 (19 + 30/60 = 19.5)
+POSTING_END_HOUR = 04.00   # 20:20 (20 + 20/60 = 20.333...)
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
 
