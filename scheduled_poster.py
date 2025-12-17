@@ -3,7 +3,7 @@
 Логика:
 - Четные дни → профили 1-5
 - Нечетные дни → профили 6-10
-- Время постинга: 8-13 GMT-5 (случайное для каждого профиля)
+- Время постинга: 19:30-20:20 по Киеву (случайное для каждого профиля)
 - В день: 4 статьи is_link='no' и 1 статья is_link='yes'
 """
 import time
@@ -13,23 +13,32 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 import pytz
 
-# Импортируем функции из medium_poster
-from medium_poster import (
+# Импорты из новой модульной архитектуры
+from poster.db import (
     get_pg_conn,
     get_refined_articles_tables,
-    get_profile_no,
-    get_profile_id,
-    get_sequential_no,
+    ensure_profile_id_column,
+    update_article_url_and_profile,
+)
+from poster.settings import (
     PROFILE_SEQUENTIAL_MAPPING,
     PROFILE_IDS,
     PROFILE_MAPPING,
-    open_ads_power_profile,
-    post_article_to_medium,
-    update_article_url_and_profile,
-    minimize_profile_window,
-    close_profile,
-    ensure_profile_id_column,
+    MEDIUM_NEW_STORY_URL,
+    get_profile_no,
+    get_profile_id,
+    get_sequential_no,
+    get_profile_id_by_sequential_no,
+    get_profile_no_by_sequential_no,
 )
+from poster.adspower.api_client import AdsPowerApiClient
+from poster.adspower.profile_manager import ProfileManager
+from poster.adspower.window_manager import WindowManager
+from poster.adspower.tabs import TabManager
+from poster.ui import PyAutoGuiDriver, Coords, Delays
+from poster.medium import publish_article, fetch_published_url
+from poster.models import Profile
+from poster.link_replacer import update_article_body_with_replaced_link
 from config import LOG_LEVEL, LOG_MODE
 from psycopg import sql
 from telegram_bot import notify_poster_started, notify_article_posted
@@ -41,11 +50,159 @@ logging.basicConfig(
 )
 
 # Константы
-GMT_MINUS_5 = pytz.timezone('America/New_York')  # GMT-5 (EST/EDT)
+KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')  # Киевское время (UTC+2/UTC+3)
 POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
 POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
+
+# Глобальные менеджеры для работы с профилями (инициализируются в main())
+_profile_manager: Optional[ProfileManager] = None
+_window_manager: Optional[WindowManager] = None
+_tab_manager: Optional[TabManager] = None
+_ui: Optional[PyAutoGuiDriver] = None
+_coords: Optional[Coords] = None
+_delays: Optional[Delays] = None
+
+
+def _init_managers():
+    """Инициализирует глобальные менеджеры (вызывается один раз в main())."""
+    global _profile_manager, _window_manager, _tab_manager, _ui, _coords, _delays
+    if _profile_manager is None:
+        api_client = AdsPowerApiClient()
+        _profile_manager = ProfileManager(api_client)
+        _window_manager = WindowManager()
+        _tab_manager = TabManager()
+        _ui = PyAutoGuiDriver()
+        _coords = Coords()
+        _delays = Delays()
+
+
+def open_ads_power_profile(profile_id: str) -> Optional[Profile]:
+    """
+    Открывает и подготавливает профиль AdsPower для постинга.
+    Возвращает Profile объект или None при ошибке.
+    """
+    _init_managers()
+    
+    profile_no = get_profile_no(profile_id)
+    if profile_no == 0:
+        logging.error("Profile ID %s not found in PROFILE_MAPPING", profile_id)
+        return None
+    
+    sequential_no = get_sequential_no(profile_no)
+    if not sequential_no:
+        logging.error("Profile No %d has no sequential_no mapping", profile_no)
+        return None
+    
+    logging.info("Opening profile: ID=%s, No=%d, Seq=%d", profile_id, profile_no, sequential_no)
+    
+    # Подготавливаем профиль
+    profile = _profile_manager.ensure_ready(profile_no)
+    if not profile:
+        logging.error("Failed to ensure profile %d is ready", profile_no)
+        return None
+    
+    # Фокус/максимизация окна
+    if not _window_manager.focus(profile):
+        logging.warning("Failed to focus/maximize window, but continuing...")
+    
+    # Открываем Medium вкладку
+    if not _tab_manager.ensure_medium_tab_open(profile, _ui, _window_manager):
+        logging.error("Failed to open Medium tab for profile %d", profile_no)
+        return None
+    
+    logging.info("✓ Profile ready: window focused, Medium tab active")
+    return profile
+
+
+def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
+    """
+    Публикует статью на Medium через PyAutoGUI.
+    Возвращает URL опубликованной статьи или None при ошибке.
+    """
+    _init_managers()
+    
+    article_id = article.get('id') if isinstance(article, dict) else article[0]
+    profile_no = get_profile_no(profile_id)
+    sequential_no = get_sequential_no(profile_no)
+    profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+    
+    logging.info("="*60)
+    logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
+    logging.info("="*60)
+    
+    # Получаем профиль из кэша
+    if profile_no not in _profile_manager.profiles:
+        logging.error("Profile %d not found in profile manager cache", profile_no)
+        return None
+    
+    profile = _profile_manager.profiles[profile_no]
+    
+    # Убеждаемся, что окно активно и Medium вкладка открыта
+    if not _window_manager.focus(profile):
+        logging.warning("Failed to focus window, but continuing...")
+    
+    # Переключаемся на Medium вкладку
+    if profile.driver and profile.medium_window_handle:
+        try:
+            from poster.adspower.tabs import safe_switch_to
+            safe_switch_to(profile.driver, profile.medium_window_handle)
+            current_url = profile.driver.current_url
+            logging.info("Current URL on Medium tab: %s", current_url)
+            
+            if 'medium.com' not in current_url:
+                logging.warning("Not on Medium page, navigating to Medium...")
+                profile.driver.get(MEDIUM_NEW_STORY_URL)
+                time.sleep(2)
+                profile.medium_window_handle = profile.driver.current_window_handle
+        except Exception as e:
+            logging.warning("Failed to switch to Medium tab: %s, trying to navigate...", e)
+            if profile.driver:
+                profile.driver.get(MEDIUM_NEW_STORY_URL)
+                time.sleep(2)
+                profile.medium_window_handle = profile.driver.current_window_handle
+    
+    # Публикуем статью через PyAutoGUI
+    success = publish_article(_ui, article, _coords, _delays)
+    if not success:
+        logging.error("Failed to publish article ID %s", article_id)
+        return None
+    
+    # Получаем URL опубликованной статьи
+    time.sleep(2)  # Даем время на загрузку страницы
+    url = fetch_published_url(profile, _ui)
+    
+    if url:
+        logging.info("✓ Article published successfully! URL: %s", url)
+        return url
+    else:
+        logging.error("Failed to get URL for article ID %s", article_id)
+        return None
+
+
+def minimize_profile_window(profile_no: int) -> bool:
+    """Минимизирует окно профиля."""
+    _init_managers()
+    
+    if profile_no not in _profile_manager.profiles:
+        logging.warning("Profile %d not found in profile manager cache", profile_no)
+        return False
+    
+    profile = _profile_manager.profiles[profile_no]
+    return _window_manager.minimize(profile)
+
+
+def close_profile(profile_id: str) -> bool:
+    """Закрывает профиль AdsPower."""
+    _init_managers()
+    
+    profile_no = get_profile_no(profile_id)
+    if profile_no == 0:
+        logging.error("Profile ID %s not found in PROFILE_MAPPING", profile_id)
+        return False
+    
+    return _profile_manager.close(profile_no)
 
 
 def get_articles_by_is_link(pg_conn, table_name: str, is_link: str, limit: int) -> List[dict]:
@@ -134,7 +291,7 @@ def get_profiles_for_today() -> List[Tuple[str, int, int]]:
     Определяет, какие профили использовать сегодня.
     Возвращает список кортежей: (profile_id, profile_no, sequential_no)
     """
-    today = datetime.now(GMT_MINUS_5)
+    today = datetime.now(KIEV_TIMEZONE)
     day_of_month = today.day
     is_even_day = (day_of_month % 2 == 0)
     
@@ -172,10 +329,10 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
     """
     Генерирует расписание постинга для профилей.
     Возвращает список: (profile_id, profile_no, sequential_no, posting_time)
-    Время выбирается случайно в промежутке 8-13 GMT-5.
+    Время выбирается случайно в промежутке 19:30-20:20 по Киеву.
     Минимальный интервал между временами постинга - 10 минут.
     """
-    today = datetime.now(GMT_MINUS_5).date()
+    today = datetime.now(KIEV_TIMEZONE).date()
     schedule = []
     used_times = []  # Список уже использованных времен для проверки интервала
     
@@ -189,7 +346,7 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
             hour = int(random_hour)  # Целая часть - часы
             minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
             
-            candidate_time = GMT_MINUS_5.localize(
+            candidate_time = KIEV_TIMEZONE.localize(
                 datetime.combine(today, datetime.min.time().replace(hour=hour, minute=minute))
             )
             
@@ -216,7 +373,7 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
                 random_hour = random.uniform(POSTING_START_HOUR, POSTING_END_HOUR)
                 hour = int(random_hour)  # Целая часть - часы
                 minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
-                posting_time = GMT_MINUS_5.localize(
+                posting_time = KIEV_TIMEZONE.localize(
                     datetime.combine(today, datetime.min.time().replace(hour=hour, minute=minute))
                 )
             used_times.append(posting_time)
@@ -224,7 +381,7 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
                           seq_no, posting_time.strftime("%H:%M"))
         
         schedule.append((profile_id, profile_no, seq_no, posting_time))
-        logging.info("Profile Seq:%d scheduled for posting at %s (GMT-5)", 
+        logging.info("Profile Seq:%d scheduled for posting at %s (Kiev time)", 
                     seq_no, posting_time.strftime("%H:%M"))
     
     # Сортируем по времени
@@ -244,18 +401,18 @@ def log_summary(article_topic: str, profile_seq: int, posting_time: datetime, ur
 
 def wait_until_time(target_time: datetime):
     """Ждет до указанного времени"""
-    now = datetime.now(GMT_MINUS_5)
+    now = datetime.now(KIEV_TIMEZONE)
     if target_time <= now:
         logging.warning("Target time %s has already passed, posting immediately", target_time.strftime("%H:%M"))
         return
     
     wait_seconds = (target_time - now).total_seconds()
-    logging.info("Waiting until %s (GMT-5) - %.1f seconds remaining", 
+    logging.info("Waiting until %s (Kiev time) - %.1f seconds remaining", 
                 target_time.strftime("%H:%M"), wait_seconds)
     
     # Ждем с периодическими проверками (каждые 60 секунд)
-    while datetime.now(GMT_MINUS_5) < target_time:
-        remaining = (target_time - datetime.now(GMT_MINUS_5)).total_seconds()
+    while datetime.now(KIEV_TIMEZONE) < target_time:
+        remaining = (target_time - datetime.now(KIEV_TIMEZONE)).total_seconds()
         if remaining > 60:
             time.sleep(60)
             logging.debug("Still waiting... %.1f minutes remaining", remaining / 60)
@@ -408,9 +565,35 @@ def main():
         for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             article_topic = article.get('topic', 'N/A')
+            is_link = article.get('is_link', 'no') if isinstance(article, dict) else 'no'
             
             # Ждем до времени постинга
             wait_until_time(posting_time)
+            
+            # Если статья с is_link='yes', заменяем ссылку перед постингом
+            if is_link == 'yes':
+                logging.info("")
+                logging.info("Article has is_link='yes', replacing Bonza link with referral...")
+                success = update_article_body_with_replaced_link(
+                    pg_conn,
+                    selected_table,
+                    article_id,
+                    seq_no
+                )
+                if success:
+                    logging.info("✓ Link replaced successfully")
+                    # Обновляем статью в памяти, чтобы использовать обновленную версию
+                    # Получаем обновленную статью из БД
+                    try:
+                        from poster.db import get_articles_to_post
+                        updated_articles = get_articles_to_post(pg_conn, selected_table, [article_id])
+                        if updated_articles:
+                            article = updated_articles[0]
+                            logging.info("Article data refreshed from database")
+                    except Exception as e:
+                        logging.warning("Failed to refresh article from database: %s", e)
+                else:
+                    logging.warning("Failed to replace link, continuing with original article")
             
             # Открываем профиль
             logging.info("")
@@ -438,7 +621,7 @@ def main():
                     
                     # Сокращенное логирование (в режиме SUMMARY)
                     if LOG_MODE.upper() == "SUMMARY":
-                        actual_time = datetime.now(GMT_MINUS_5)
+                        actual_time = datetime.now(KIEV_TIMEZONE)
                         log_summary(article_topic, seq_no, actual_time, url)
                     else:
                         # В режиме DEBUG уже есть полное логирование из post_article_to_medium
