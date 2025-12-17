@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 import pytz
 
-# Импорты из новой модульной архитектуры
+# Импорты из новой модульной архитектуры ITS ALIVE BITCH
 from poster.db import (
     get_pg_conn,
     get_refined_articles_tables,
