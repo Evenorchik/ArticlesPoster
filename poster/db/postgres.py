@@ -134,11 +134,32 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
         logging.warning("Could not check for hashtag5 column (assuming it doesn't exist): %s", e)
         has_hashtag5 = False
 
-    # Формируем список колонок в зависимости от наличия hashtag5
+    # Проверяем наличие колонки cover_image_name
+    has_cover_image = False
+    try:
+        check_cover_query = sql.SQL("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_schema = 'public' 
+            AND table_name = %s 
+            AND column_name = 'cover_image_name'
+        """)
+        with pg_conn.cursor() as cur:
+            cur.execute(check_cover_query, (table_name,))
+            has_cover_image = cur.fetchone() is not None
+        logging.debug("Table has cover_image_name column: %s", has_cover_image)
+    except Exception as e:
+        logging.debug("Could not check for cover_image_name column (assuming it doesn't exist): %s", e)
+        has_cover_image = False
+
+    # Формируем список колонок в зависимости от наличия hashtag5 и cover_image_name
+    base_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4"
     if has_hashtag5:
-        select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, hashtag5, url, profile_id"
-    else:
-        select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, url, profile_id"
+        base_cols += ", hashtag5"
+    base_cols += ", url, profile_id"
+    if has_cover_image:
+        base_cols += ", cover_image_name"
+    select_cols = base_cols
 
     if article_ids:
         logging.info("Fetching articles by IDs: %s", article_ids)

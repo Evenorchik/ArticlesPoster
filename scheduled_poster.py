@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 import pytz
 
-# Импорты из новой модульной архитектуры ITS ALIVE BITCH
+# Импорты из новой модульной архитектуры ITS ALIVE
 from poster.db import (
     get_pg_conn,
     get_refined_articles_tables,
@@ -38,6 +38,7 @@ from poster.adspower.window_manager import WindowManager
 from poster.adspower.tabs import TabManager
 from poster.ui import PyAutoGuiDriver, Coords, Delays
 from poster.medium import publish_article, fetch_published_url
+from poster.quora import publish_article as publish_article_quora, fetch_published_url as fetch_published_url_quora
 from poster.models import Profile
 from poster.link_replacer import update_article_body_with_replaced_link
 from config import LOG_LEVEL, LOG_MODE
@@ -52,10 +53,13 @@ logging.basicConfig(
 
 # Константы
 KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')  # Киевское время (UTC+2/UTC+3)
-POSTING_START_HOUR = 04.00   # 19:30 (19 + 30/60 = 19.5)
-POSTING_END_HOUR = 04.00   # 20:20 (20 + 20/60 = 20.333...)
-ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день
-ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день
+MEDIUM_POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
+MEDIUM_POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
+QUORA_POSTING_START_HOUR = 20.5    # 20:30 (20 + 30/60 = 20.5)
+QUORA_POSTING_END_HOUR = 21.5      # 21:30 (21 + 30/60 = 21.5)
+ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день (для каждой платформы)
+ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день (для каждой платформы)
+IMAGES_ROOT_DIR = "./data/images"  # Папка с изображениями для обложек
 
 # Глобальные менеджеры для работы с профилями (инициализируются в main())
 _profile_manager: Optional[ProfileManager] = None
@@ -182,6 +186,73 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
         return None
 
 
+def post_article_to_quora(article: dict, profile_id: str) -> Optional[str]:
+    """
+    Публикует статью на Quora через PyAutoGUI.
+    Возвращает URL опубликованной статьи или None при ошибке.
+    """
+    _init_managers()
+    
+    article_id = article.get('id') if isinstance(article, dict) else article[0]
+    profile_no = get_profile_no(profile_id)
+    sequential_no = get_sequential_no(profile_no)
+    profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
+    
+    logging.info("="*60)
+    logging.info("Posting article ID %s to Quora using profile: %s", article_id, profile_info)
+    logging.info("="*60)
+    
+    # Получаем профиль из кэша
+    if profile_no not in _profile_manager.profiles:
+        logging.error("Profile %d not found in profile manager cache", profile_no)
+        return None
+    
+    profile = _profile_manager.profiles[profile_no]
+    
+    # Убеждаемся, что окно активно и Quora вкладка открыта
+    if not _window_manager.focus(profile):
+        logging.warning("Failed to focus window, but continuing...")
+    
+    # Переключаемся на Quora вкладку
+    if profile.driver and profile.quora_window_handle:
+        try:
+            from poster.adspower.tabs import safe_switch_to
+            from poster.settings import QUORA_URL
+            safe_switch_to(profile.driver, profile.quora_window_handle)
+            current_url = profile.driver.current_url
+            logging.info("Current URL on Quora tab: %s", current_url)
+            
+            if 'quora.com' not in current_url:
+                logging.warning("Not on Quora page, navigating to Quora...")
+                profile.driver.get(QUORA_URL)
+                time.sleep(2)
+                profile.quora_window_handle = profile.driver.current_window_handle
+        except Exception as e:
+            logging.warning("Failed to switch to Quora tab: %s, trying to navigate...", e)
+            if profile.driver:
+                from poster.settings import QUORA_URL
+                profile.driver.get(QUORA_URL)
+                time.sleep(2)
+                profile.quora_window_handle = profile.driver.current_window_handle
+    
+    # Публикуем статью через PyAutoGUI
+    success = publish_article_quora(_ui, article, _coords, _delays, profile.driver, IMAGES_ROOT_DIR)
+    if not success:
+        logging.error("Failed to publish article ID %s to Quora", article_id)
+        return None
+    
+    # Получаем URL опубликованной статьи
+    time.sleep(2)  # Даем время на загрузку страницы
+    url = fetch_published_url_quora(profile, _ui)
+    
+    if url:
+        logging.info("✓ Article published successfully on Quora! URL: %s", url)
+        return url
+    else:
+        logging.error("Failed to get URL for article ID %s on Quora", article_id)
+        return None
+
+
 def minimize_profile_window(profile_no: int) -> bool:
     """Минимизирует окно профиля."""
     _init_managers()
@@ -242,11 +313,25 @@ def get_articles_by_is_link(pg_conn, table_name: str, is_link: str, limit: int) 
         cur.execute(check_hashtag5_query, (table_name,))
         has_hashtag5 = cur.fetchone() is not None
     
-    # Формируем запрос в зависимости от наличия hashtag5
+    # Проверяем наличие колонки cover_image_name
+    check_cover_query = sql.SQL("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = %s AND column_name = 'cover_image_name'
+    """)
+    
+    with pg_conn.cursor() as cur:
+        cur.execute(check_cover_query, (table_name,))
+        has_cover_image = cur.fetchone() is not None
+    
+    # Формируем запрос в зависимости от наличия hashtag5 и cover_image_name
+    base_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4"
     if has_hashtag5:
-        select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, hashtag5, url, profile_id, is_link"
-    else:
-        select_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4, url, profile_id, is_link"
+        base_cols += ", hashtag5"
+    base_cols += ", url, profile_id, is_link"
+    if has_cover_image:
+        base_cols += ", cover_image_name"
+    select_cols = base_cols
     
     # Формируем WHERE условие
     if has_is_link:
@@ -326,7 +411,35 @@ def get_profiles_for_today() -> List[Tuple[str, int, int]]:
     return profiles
 
 
-def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tuple[str, int, int, datetime]]:
+def check_time_overlap(
+    start1: float, end1: float,
+    start2: float, end2: float
+) -> bool:
+    """
+    Проверяет, пересекаются ли два временных диапазона.
+    
+    Args:
+        start1, end1: Первый диапазон (часы в формате float)
+        start2, end2: Второй диапазон (часы в формате float)
+    
+    Returns:
+        True если диапазоны пересекаются, False иначе
+    """
+    # Преобразуем в минуты для удобства сравнения
+    start1_min = int(start1 * 60)
+    end1_min = int(end1 * 60)
+    start2_min = int(start2 * 60)
+    end2_min = int(end2 * 60)
+    
+    # Проверяем пересечение
+    return not (end1_min <= start2_min or end2_min <= start1_min)
+
+
+def generate_posting_schedule(
+    profiles: List[Tuple[str, int, int]],
+    start_hour: float,
+    end_hour: float
+) -> List[Tuple[str, int, int, datetime]]:
     """
     Генерирует расписание постинга для профилей.
     Возвращает список: (profile_id, profile_no, sequential_no, posting_time)
@@ -342,8 +455,8 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
         posting_time = None
         
         for attempt in range(max_attempts):
-            # Генерируем случайное время между POSTING_START_HOUR и POSTING_END_HOUR
-            random_hour = random.uniform(POSTING_START_HOUR, POSTING_END_HOUR)
+            # Генерируем случайное время между start_hour и end_hour
+            random_hour = random.uniform(start_hour, end_hour)
             hour = int(random_hour)  # Целая часть - часы
             minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
             
@@ -371,7 +484,7 @@ def generate_posting_schedule(profiles: List[Tuple[str, int, int]]) -> List[Tupl
                 posting_time = last_time + timedelta(minutes=10)
             else:
                 # Первый профиль - случайное время
-                random_hour = random.uniform(POSTING_START_HOUR, POSTING_END_HOUR)
+                random_hour = random.uniform(start_hour, end_hour)
                 hour = int(random_hour)  # Целая часть - часы
                 minute = int((random_hour - hour) * 60)  # Дробная часть * 60 = минуты
                 posting_time = KIEV_TIMEZONE.localize(
@@ -425,7 +538,7 @@ def wait_until_time(target_time: datetime):
 def main():
     """Основная функция планировщика"""
     logging.info("="*60)
-    logging.info("Starting Scheduled Medium Poster")
+    logging.info("Starting Scheduled Poster (Medium + Quora)")
     logging.info("Log mode: %s", LOG_MODE.upper())
     logging.info("="*60)
     
@@ -464,98 +577,186 @@ def main():
         # Убеждаемся, что колонка profile_id существует в таблице
         ensure_profile_id_column(pg_conn, selected_table)
         
+        # Ввод времени постинга для Medium
+        logging.info("")
+        logging.info("Enter posting time range for Medium (Kiev time):")
+        medium_start_input = input("  Start time (HH:MM, e.g., 19:30): ").strip()
+        medium_end_input = input("  End time (HH:MM, e.g., 20:20): ").strip()
+        
+        try:
+            medium_start_parts = medium_start_input.split(':')
+            medium_start_hour = float(medium_start_parts[0]) + float(medium_start_parts[1]) / 60.0
+            medium_end_parts = medium_end_input.split(':')
+            medium_end_hour = float(medium_end_parts[0]) + float(medium_end_parts[1]) / 60.0
+        except (ValueError, IndexError):
+            logging.error("Invalid time format! Using defaults.")
+            medium_start_hour = MEDIUM_POSTING_START_HOUR
+            medium_end_hour = MEDIUM_POSTING_END_HOUR
+        
+        # Ввод времени постинга для Quora
+        logging.info("")
+        logging.info("Enter posting time range for Quora (Kiev time):")
+        quora_start_input = input("  Start time (HH:MM, e.g., 20:30): ").strip()
+        quora_end_input = input("  End time (HH:MM, e.g., 21:30): ").strip()
+        
+        try:
+            quora_start_parts = quora_start_input.split(':')
+            quora_start_hour = float(quora_start_parts[0]) + float(quora_start_parts[1]) / 60.0
+            quora_end_parts = quora_end_input.split(':')
+            quora_end_hour = float(quora_end_parts[0]) + float(quora_end_parts[1]) / 60.0
+        except (ValueError, IndexError):
+            logging.error("Invalid time format! Using defaults.")
+            quora_start_hour = QUORA_POSTING_START_HOUR
+            quora_end_hour = QUORA_POSTING_END_HOUR
+        
+        # Проверка на пересечение временных диапазонов
+        if check_time_overlap(medium_start_hour, medium_end_hour, quora_start_hour, quora_end_hour):
+            logging.error("="*60)
+            logging.error("ERROR: Time ranges overlap!")
+            logging.error("Medium: %.2f - %.2f", medium_start_hour, medium_end_hour)
+            logging.error("Quora: %.2f - %.2f", quora_start_hour, quora_end_hour)
+            logging.error("="*60)
+            logging.error("Please adjust the time ranges to avoid overlap.")
+            return
+        
+        logging.info("")
+        logging.info("Time ranges:")
+        logging.info("  Medium: %.2f - %.2f (Kiev time)", medium_start_hour, medium_end_hour)
+        logging.info("  Quora: %.2f - %.2f (Kiev time)", quora_start_hour, quora_end_hour)
+        
         # Получаем профили для сегодня
         profiles = get_profiles_for_today()
         if not profiles:
             logging.error("No profiles found for today!")
             return
         
-        # Генерируем расписание
-        schedule = generate_posting_schedule(profiles)
+        # Генерируем расписание для Medium
+        medium_schedule = generate_posting_schedule(profiles, medium_start_hour, medium_end_hour)
         
-        # Получаем статьи
+        # Генерируем расписание для Quora
+        quora_schedule = generate_posting_schedule(profiles, quora_start_hour, quora_end_hour)
+        
+        # Получаем статьи для Medium (5 статей: 4 без ссылки, 1 со ссылкой)
         logging.info("")
-        logging.info("Fetching articles from database...")
-        articles_no_link = get_articles_by_is_link(pg_conn, selected_table, 'no', ARTICLES_NO_LINK_COUNT)
-        articles_with_link = get_articles_by_is_link(pg_conn, selected_table, 'yes', ARTICLES_WITH_LINK_COUNT)
+        logging.info("Fetching articles for Medium from database...")
+        medium_articles_no_link = get_articles_by_is_link(pg_conn, selected_table, 'no', ARTICLES_NO_LINK_COUNT)
+        medium_articles_with_link = get_articles_by_is_link(pg_conn, selected_table, 'yes', ARTICLES_WITH_LINK_COUNT)
         
-        total_articles = len(articles_no_link) + len(articles_with_link)
-        logging.info("Total articles to post today: %d (%d with is_link='no', %d with is_link='yes')", 
-                    total_articles, len(articles_no_link), len(articles_with_link))
+        # Получаем статьи для Quora (5 статей: 4 без ссылки, 1 со ссылкой)
+        logging.info("Fetching articles for Quora from database...")
+        quora_articles_no_link = get_articles_by_is_link(pg_conn, selected_table, 'no', ARTICLES_NO_LINK_COUNT)
+        quora_articles_with_link = get_articles_by_is_link(pg_conn, selected_table, 'yes', ARTICLES_WITH_LINK_COUNT)
         
-        if total_articles == 0:
+        total_medium = len(medium_articles_no_link) + len(medium_articles_with_link)
+        total_quora = len(quora_articles_no_link) + len(quora_articles_with_link)
+        logging.info("Total articles to post today:")
+        logging.info("  Medium: %d (%d with is_link='no', %d with is_link='yes')", 
+                    total_medium, len(medium_articles_no_link), len(medium_articles_with_link))
+        logging.info("  Quora: %d (%d with is_link='no', %d with is_link='yes')", 
+                    total_quora, len(quora_articles_no_link), len(quora_articles_with_link))
+        
+        if total_medium == 0 and total_quora == 0:
             logging.warning("No articles to post today!")
             return
         
-        if len(articles_no_link) < ARTICLES_NO_LINK_COUNT:
-            logging.warning("Only %d articles with is_link='no' available (need %d)", 
-                          len(articles_no_link), ARTICLES_NO_LINK_COUNT)
+        # Распределяем статьи Medium по профилям
+        random.shuffle(medium_articles_no_link)
+        medium_article_assignments = []
+        medium_used_profiles = set()
         
-        if len(articles_with_link) < ARTICLES_WITH_LINK_COUNT:
-            logging.warning("Only %d articles with is_link='yes' available (need %d)", 
-                          len(articles_with_link), ARTICLES_WITH_LINK_COUNT)
+        profiles_for_medium_no_link = medium_schedule[:min(len(medium_articles_no_link), len(medium_schedule))]
+        for i, (profile_id, profile_no, seq_no, posting_time) in enumerate(profiles_for_medium_no_link):
+            if i < len(medium_articles_no_link):
+                medium_article_assignments.append((profile_id, profile_no, seq_no, posting_time, medium_articles_no_link[i], 'medium'))
+                medium_used_profiles.add(profile_id)
+                logging.info("Medium article is_link='no' (ID: %s) assigned to profile Seq:%d", 
+                            medium_articles_no_link[i].get('id'), seq_no)
         
-        # Распределяем статьи по профилям
-        # Важно: все 5 профилей должны постить, без пересечений
-        # 4 профиля постит is_link='no', 1 профиль постит is_link='yes'
-        
-        random.shuffle(articles_no_link)  # Перемешиваем для случайного распределения
-        
-        article_assignments = []
-        used_profiles = set()  # Множество уже использованных профилей
-        
-        # Распределяем 4 статьи is_link='no' по первым 4 профилям
-        profiles_for_no_link = schedule[:min(len(articles_no_link), len(schedule))]
-        
-        for i, (profile_id, profile_no, seq_no, posting_time) in enumerate(profiles_for_no_link):
-            if i < len(articles_no_link):
-                article_assignments.append((profile_id, profile_no, seq_no, posting_time, articles_no_link[i]))
-                used_profiles.add(profile_id)  # Отмечаем профиль как использованный
-                logging.info("Article is_link='no' (ID: %s) assigned to profile Seq:%d", 
-                            articles_no_link[i].get('id'), seq_no)
-        
-        # Для статьи is_link='yes' выбираем случайный профиль из НЕИСПОЛЬЗОВАННЫХ
-        if articles_with_link and len(schedule) > 0:
-            article_with_link = articles_with_link[0]
+        # Для статьи Medium is_link='yes' выбираем случайный профиль из НЕИСПОЛЬЗОВАННЫХ
+        if medium_articles_with_link and len(medium_schedule) > 0:
+            article_with_link = medium_articles_with_link[0]
             
             # Находим свободные профили (те, которые не использованы для is_link='no')
-            free_profiles = [p for p in schedule if p[0] not in used_profiles]
+            free_profiles = [p for p in medium_schedule if p[0] not in medium_used_profiles]
             
             if free_profiles:
                 random_profile = random.choice(free_profiles)  # Случайный профиль из свободных
-                article_assignments.append((
+                medium_article_assignments.append((
                     random_profile[0],  # profile_id
                     random_profile[1],  # profile_no
                     random_profile[2],  # seq_no
                     random_profile[3],  # posting_time
-                    article_with_link
+                    article_with_link,
+                    'medium'
                 ))
-                logging.info("Article with is_link='yes' (ID: %s, Topic: %s) assigned to profile Seq:%d", 
+                logging.info("Medium article with is_link='yes' (ID: %s, Topic: %s) assigned to profile Seq:%d", 
                             article_with_link.get('id'), article_with_link.get('topic', 'N/A')[:50], random_profile[2])
             else:
-                logging.error("No free profiles available for article is_link='yes'! All profiles are already used.")
-                logging.warning("This should not happen - we have 5 profiles and 5 articles (4+1)")
+                logging.error("No free profiles available for Medium article is_link='yes'! All profiles are already used.")
         
-        # Сортируем по времени постинга
-        article_assignments.sort(key=lambda x: x[3])
+        # Распределяем статьи Quora по профилям
+        random.shuffle(quora_articles_no_link)
+        quora_article_assignments = []
+        quora_used_profiles = set()
+        
+        profiles_for_quora_no_link = quora_schedule[:min(len(quora_articles_no_link), len(quora_schedule))]
+        for i, (profile_id, profile_no, seq_no, posting_time) in enumerate(profiles_for_quora_no_link):
+            if i < len(quora_articles_no_link):
+                quora_article_assignments.append((profile_id, profile_no, seq_no, posting_time, quora_articles_no_link[i], 'quora'))
+                quora_used_profiles.add(profile_id)
+                logging.info("Quora article is_link='no' (ID: %s) assigned to profile Seq:%d", 
+                            quora_articles_no_link[i].get('id'), seq_no)
+        
+        # Для статьи Quora is_link='yes' выбираем случайный профиль из НЕИСПОЛЬЗОВАННЫХ
+        if quora_articles_with_link and len(quora_schedule) > 0:
+            article_with_link = quora_articles_with_link[0]
+            
+            # Находим свободные профили (те, которые не использованы для is_link='no')
+            free_profiles = [p for p in quora_schedule if p[0] not in quora_used_profiles]
+            
+            if free_profiles:
+                random_profile = random.choice(free_profiles)  # Случайный профиль из свободных
+                quora_article_assignments.append((
+                    random_profile[0],  # profile_id
+                    random_profile[1],  # profile_no
+                    random_profile[2],  # seq_no
+                    random_profile[3],  # posting_time
+                    article_with_link,
+                    'quora'
+                ))
+                logging.info("Quora article with is_link='yes' (ID: %s, Topic: %s) assigned to profile Seq:%d", 
+                            article_with_link.get('id'), article_with_link.get('topic', 'N/A')[:50], random_profile[2])
+            else:
+                logging.error("No free profiles available for Quora article is_link='yes'! All profiles are already used.")
+        
+        # Объединяем все назначения и сортируем по времени постинга
+        all_article_assignments = medium_article_assignments + quora_article_assignments
+        all_article_assignments.sort(key=lambda x: x[3])  # Сортировка по времени
         
         logging.info("")
         logging.info("Posting schedule:")
-        for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
+        for assignment in all_article_assignments:
+            if len(assignment) == 6:  # С платформой
+                profile_id, profile_no, seq_no, posting_time, article, platform = assignment
+            else:  # Без платформы (старый формат)
+                profile_id, profile_no, seq_no, posting_time, article = assignment
+                platform = 'medium'  # По умолчанию
             article_topic = article.get('topic', 'N/A')[:50]
-            logging.info("  Profile Seq:%d → Article: %s → Time: %s", 
-                        seq_no, article_topic, posting_time.strftime("%H:%M"))
+            logging.info("  Profile Seq:%d → %s → Article: %s → Time: %s", 
+                        seq_no, platform.upper(), article_topic, posting_time.strftime("%H:%M"))
         
         # Подтверждение
         logging.info("")
-        response = input(f"Ready to post {len(article_assignments)} article(s). Press Enter to start, or 'q' to quit: ").strip().lower()
+        response = input(f"Ready to post {len(all_article_assignments)} article(s) ({len(medium_article_assignments)} Medium + {len(quora_article_assignments)} Quora). Press Enter to start, or 'q' to quit: ").strip().lower()
         if response == 'q':
             logging.info("Aborted by user")
             return
         
         # Отправляем уведомление о запуске автопостера после подтверждения
         try:
-            notify_poster_started(selected_table, article_assignments)
+            # Преобразуем формат для notify_poster_started (убираем platform из кортежа)
+            notify_assignments = [(a[0], a[1], a[2], a[3], a[4]) if len(a) == 6 else a for a in all_article_assignments]
+            notify_poster_started(selected_table, notify_assignments)
         except Exception as e:
             logging.warning("Failed to send Telegram notification about poster start: %s", e)
         
@@ -564,7 +765,13 @@ def main():
         failed_count = 0
         posted_articles_info = []  # Список для финального отчета
         
-        for profile_id, profile_no, seq_no, posting_time, article in article_assignments:
+        for assignment in all_article_assignments:
+            # Извлекаем данные из кортежа
+            if len(assignment) == 6:  # С платформой
+                profile_id, profile_no, seq_no, posting_time, article, platform = assignment
+            else:  # Без платформы (старый формат)
+                profile_id, profile_no, seq_no, posting_time, article = assignment
+                platform = 'medium'  # По умолчанию
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             article_topic = article.get('topic', 'N/A')
             is_link = article.get('is_link', 'no') if isinstance(article, dict) else 'no'
@@ -604,7 +811,7 @@ def main():
                         article_id, article_topic[:50], seq_no)
             logging.info("="*60)
             
-            result = open_ads_power_profile(profile_id)
+            result = open_ads_power_profile(profile_id, platform)
             if not result:
                 logging.error("Failed to open profile Seq:%d, skipping article ID %s", seq_no, article_id)
                 failed_count += 1
@@ -613,8 +820,11 @@ def main():
             time.sleep(5)
             
             try:
-                # Постим статью
-                url = post_article_to_medium(article, profile_id)
+                # Постим статью в зависимости от платформы
+                if platform == 'quora':
+                    url = post_article_to_quora(article, profile_id)
+                else:
+                    url = post_article_to_medium(article, profile_id)
                 
                 if url:
                     # Обновляем БД
@@ -639,7 +849,8 @@ def main():
                         'profile_no': profile_no,
                         'url': url,
                         'has_link': (is_link == 'yes'),
-                        'article_link': article_link
+                        'article_link': article_link,
+                        'platform': platform
                     })
                     
                     # Сокращенное логирование (в режиме SUMMARY)

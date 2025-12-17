@@ -15,7 +15,7 @@ import time
 from typing import Optional, Set
 
 from poster.models import Profile
-from poster.settings import MEDIUM_NEW_STORY_URL
+from poster.settings import MEDIUM_NEW_STORY_URL, QUORA_URL
 
 
 # ---------------------------
@@ -254,8 +254,9 @@ class TabManager:
     UI (pyautogui) используется только как fallback, если создание вкладки Selenium/CDP не сработало.
     """
 
-    def __init__(self, medium_new_story_url: str = MEDIUM_NEW_STORY_URL):
+    def __init__(self, medium_new_story_url: str = MEDIUM_NEW_STORY_URL, quora_url: str = QUORA_URL):
         self.MEDIUM_NEW_STORY_URL = medium_new_story_url
+        self.QUORA_URL = quora_url
 
     def ensure_medium_tab_open(
         self,
@@ -374,6 +375,154 @@ class TabManager:
         # 7) Вернёмся на Medium
         if getattr(profile, "medium_window_handle", None):
             safe_switch_to(driver, profile.medium_window_handle)
+
+        time.sleep(max(0.0, float(wait_after_open)))
+        return True
+
+    def ensure_quora_tab_open(
+        self,
+        profile: Profile,
+        ui=None,
+        window_manager=None,
+        wait_after_open: float = 1.5,
+    ) -> bool:
+        """
+        Гарантирует, что:
+        - существует вкладка Quora
+        - она активна
+        - окно (опционально) вынесено на передний план и максимизировано (для PyAutoGUI)
+        """
+        driver = getattr(profile, "driver", None)
+        if not driver:
+            logging.error("TabManager: no driver for profile %s", getattr(profile, "profile_no", "?"))
+            return False
+
+        # 1) Подготовим tag tab (не ломая вкладки)
+        ensure_tag_tab(profile)
+
+        # 2) Пытаемся найти уже открытую Quora вкладку
+        h = None
+        try:
+            handles = list(driver.window_handles or [])
+            for handle in handles:
+                if not safe_switch_to(driver, handle):
+                    continue
+                try:
+                    url = driver.current_url
+                    if 'quora.com' in url:
+                        h = handle
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if h:
+            safe_switch_to(driver, h)
+            profile.quora_window_handle = h
+        else:
+            # 3) Создаём новую вкладку под Quora
+            created = _create_new_tab(driver)
+            if created:
+                safe_switch_to(driver, created)
+                try:
+                    driver.get(self.QUORA_URL)
+                except Exception:
+                    pass
+                wait_document_ready(driver, timeout_s=30)
+                wait_url_contains(driver, "quora.com", timeout_s=20)
+                profile.quora_window_handle = created
+            else:
+                # 4) Fallback на UI
+                if not (ui and window_manager):
+                    logging.error("TabManager: cannot create tab via Selenium/CDP and no UI fallback provided")
+                    return False
+
+                # сделаем tag активным -> фокус -> ctrl+t -> URL
+                if getattr(profile, "tag_window_handle", None):
+                    safe_switch_to(driver, profile.tag_window_handle)
+                    time.sleep(0.2)
+
+                try:
+                    window_manager.focus(profile)
+                except Exception:
+                    pass
+
+                handles_before = set(driver.window_handles or [])
+                try:
+                    ui.hotkey("ctrl", "t")
+                    ui.sleep(0.35)
+                    ui.hotkey("ctrl", "l")
+                    ui.sleep(0.05)
+                    if hasattr(ui, "paste_text"):
+                        ui.paste_text(self.QUORA_URL)
+                    else:
+                        ui.write(self.QUORA_URL)
+                    ui.sleep(0.05)
+                    ui.press("enter")
+                except Exception as e:
+                    logging.error("TabManager UI fallback failed: %s", e)
+                    return False
+
+                new_h = _wait_new_handle(driver, handles_before, timeout_s=8.0)
+                if new_h:
+                    safe_switch_to(driver, new_h)
+                    profile.quora_window_handle = new_h
+                else:
+                    # Ищем существующую Quora вкладку
+                    try:
+                        handles = list(driver.window_handles or [])
+                        for handle in handles:
+                            if not safe_switch_to(driver, handle):
+                                continue
+                            try:
+                                url = driver.current_url
+                                if 'quora.com' in url:
+                                    profile.quora_window_handle = handle
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                    
+                    if not getattr(profile, "quora_window_handle", None):
+                        profile.quora_window_handle = driver.current_window_handle
+
+                # Усилим навигацию Selenium
+                try:
+                    driver.get(self.QUORA_URL)
+                except Exception:
+                    pass
+                wait_document_ready(driver, timeout_s=30)
+                wait_url_contains(driver, "quora.com", timeout_s=20)
+
+        # 5) Верификация: мы реально на quora.com
+        if getattr(profile, "quora_window_handle", None):
+            safe_switch_to(driver, profile.quora_window_handle)
+
+        if not wait_url_contains(driver, "quora.com", timeout_s=15.0):
+            # Попробуем мягко восстановиться (не трогая другие вкладки)
+            try:
+                driver.get(self.QUORA_URL)
+            except Exception:
+                pass
+            wait_document_ready(driver, timeout_s=30)
+            wait_url_contains(driver, "quora.com", timeout_s=20)
+
+        # 6) Теперь можно фокусировать/максимизировать окно под PyAutoGUI
+        if window_manager:
+            try:
+                # Для поиска HWND по title (если используется fallback) полезно сделать tag активным
+                if getattr(profile, "tag_window_handle", None):
+                    safe_switch_to(driver, profile.tag_window_handle)
+                    time.sleep(0.15)
+                window_manager.focus(profile)
+            except Exception:
+                pass
+
+        # 7) Вернёмся на Quora
+        if getattr(profile, "quora_window_handle", None):
+            safe_switch_to(driver, profile.quora_window_handle)
 
         time.sleep(max(0.0, float(wait_after_open)))
         return True

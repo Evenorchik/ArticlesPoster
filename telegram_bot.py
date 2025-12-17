@@ -174,11 +174,13 @@ def notify_posting_complete(posted_articles: List[dict]) -> bool:
         url = article_info.get('url', 'N/A')
         has_link = article_info.get('has_link', False)
         article_link = article_info.get('article_link', '')
+        platform = article_info.get('platform', 'medium').upper()
         
         # Экранируем HTML
         topic_escaped = html.escape(str(topic)[:60])
         
         text += f"<b>{i}. {topic_escaped}</b>\n"
+        text += f"   📱 Platform: {platform}\n"
         text += f"   👤 Profile: Seq {profile_seq} (No {profile_no})\n"
         text += f"   🔗 Article URL: {url}\n"
         

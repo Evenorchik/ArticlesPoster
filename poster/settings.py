@@ -6,6 +6,7 @@ from config import POSTGRES_DSN
 
 # Константы
 MEDIUM_NEW_STORY_URL = "https://medium.com/new-story"
+QUORA_URL = "https://www.quora.com/"
 ADS_POWER_API_URL = "http://local.adspower.net:50325"
 ADS_POWER_API_KEY = "856007acdf241361915ed26a00a6d70b"
 

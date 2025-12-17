@@ -14,6 +14,7 @@ class Profile:
     driver: Optional[object] = None  # Selenium WebDriver
     window_tag: str = field(init=False)
     medium_window_handle: Optional[str] = None  # Handle вкладки с Medium
+    quora_window_handle: Optional[str] = None  # Handle вкладки с Quora
     sequential_no: int = field(init=False)      # Последовательный номер (1-10)
     tag_window_handle: Optional[str] = None     # Handle вкладки-ярлыка (about:blank с window_tag)
 
