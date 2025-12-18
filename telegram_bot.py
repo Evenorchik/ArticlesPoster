@@ -1,6 +1,6 @@
 """
 Telegram бот для уведомлений о постинге статей на Medium и Quora.
-Поддерживает множественных подписчиков.
+Отправляет уведомления всем пользователям, которые нажали /start в боте.
 """
 import logging
 import json
@@ -14,7 +14,7 @@ from config_bot import TELEGRAM_BOT_TOKEN
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# Файл для хранения подписчиков
+# Файл для хранения подписчиков (тех, кто нажал /start)
 SUBSCRIBERS_FILE = "telegram_subscribers.json"
 
 
@@ -28,18 +28,15 @@ def load_subscribers() -> Set[str]:
         Множество chat_id подписчиков
     """
     if not os.path.exists(SUBSCRIBERS_FILE):
-        # Если файла нет, создаем его с пустым списком
-        save_subscribers(set())
         return set()
     
     try:
         with open(SUBSCRIBERS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Поддерживаем как список, так и множество
             if isinstance(data, list):
-                return set(data)
+                return set(str(chat_id) for chat_id in data)
             elif isinstance(data, dict) and 'subscribers' in data:
-                return set(data['subscribers'])
+                return set(str(chat_id) for chat_id in data['subscribers'])
             else:
                 return set()
     except (json.JSONDecodeError, IOError) as e:
@@ -62,107 +59,86 @@ def save_subscribers(subscribers: Set[str]) -> None:
         logging.error("Failed to save subscribers file: %s", e)
 
 
-def add_subscriber(chat_id: str) -> bool:
+def sync_subscribers_from_start_commands() -> int:
     """
-    Добавляет chat_id в список подписчиков.
-    
-    Args:
-        chat_id: Chat ID для добавления
+    Синхронизирует список подписчиков из обновлений бота.
+    Находит всех пользователей, которые отправили команду /start.
     
     Returns:
-        True если успешно добавлен, False если уже существует
-    """
-    subscribers = load_subscribers()
-    if chat_id in subscribers:
-        logging.debug("Chat ID %s already subscribed", chat_id)
-        return False
-    
-    subscribers.add(chat_id)
-    save_subscribers(subscribers)
-    logging.info("Added subscriber: %s (total: %d)", chat_id, len(subscribers))
-    return True
-
-
-def remove_subscriber(chat_id: str) -> bool:
-    """
-    Удаляет chat_id из списка подписчиков.
-    
-    Args:
-        chat_id: Chat ID для удаления
-    
-    Returns:
-        True если успешно удален, False если не найден
-    """
-    subscribers = load_subscribers()
-    if chat_id not in subscribers:
-        logging.debug("Chat ID %s not found in subscribers", chat_id)
-        return False
-    
-    subscribers.remove(chat_id)
-    save_subscribers(subscribers)
-    logging.info("Removed subscriber: %s (total: %d)", chat_id, len(subscribers))
-    return True
-
-
-def get_subscribers() -> Set[str]:
-    """
-    Получает текущий список подписчиков.
-    
-    Returns:
-        Множество chat_id подписчиков
-    """
-    return load_subscribers()
-
-
-def sync_subscribers_from_updates() -> int:
-    """
-    Синхронизирует список подписчиков из последних обновлений бота.
-    Добавляет всех chat_id, которые писали боту.
-    
-    Returns:
-        Количество добавленных подписчиков
+        Количество найденных подписчиков
     """
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logging.warning("Telegram bot token not configured, skipping sync")
         return 0
     
     try:
-        # Получаем последние обновления
-        url = f"{TELEGRAM_API_URL}/getUpdates"
-        params = {"timeout": 1, "limit": 100}  # Получаем до 100 последних обновлений
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code != 200:
-            logging.warning("Failed to get updates: HTTP %d - %s", response.status_code, response.text)
-            return 0
-        
-        data = response.json()
-        if not data.get('ok'):
-            logging.warning("Telegram API returned error: %s", data.get('description', 'Unknown error'))
-            return 0
-        
-        updates = data.get('result', [])
         subscribers = load_subscribers()
-        added_count = 0
+        initial_count = len(subscribers)
         
-        for update in updates:
-            message = update.get('message', {})
-            chat = message.get('chat', {})
-            chat_id = str(chat.get('id'))
+        # Получаем все обновления
+        url = f"{TELEGRAM_API_URL}/getUpdates"
+        offset = 0
+        max_updates = 1000  # Ограничение для безопасности
+        
+        while True:
+            params = {
+                "offset": offset,
+                "timeout": 1,
+                "limit": 100
+            }
             
-            if chat_id and chat_id not in subscribers:
-                subscribers.add(chat_id)
-                added_count += 1
-                logging.info("Auto-added subscriber from updates: %s", chat_id)
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code != 200:
+                logging.warning("Failed to get updates: HTTP %d", response.status_code)
+                break
+            
+            data = response.json()
+            if not data.get('ok'):
+                logging.warning("Telegram API returned error: %s", data.get('description', 'Unknown error'))
+                break
+            
+            updates = data.get('result', [])
+            if not updates:
+                break
+            
+            # Обрабатываем обновления
+            for update in updates:
+                update_id = update.get('update_id', 0)
+                offset = max(offset, update_id + 1)
+                
+                message = update.get('message', {})
+                if not message:
+                    continue
+                
+                # Проверяем, есть ли команда /start
+                text = message.get('text', '').strip()
+                if text == '/start' or text.startswith('/start '):
+                    chat = message.get('chat', {})
+                    chat_id = str(chat.get('id'))
+                    
+                    if chat_id and chat_id not in subscribers:
+                        subscribers.add(chat_id)
+                        logging.info("Found new subscriber from /start command: %s", chat_id)
+            
+            # Ограничение для безопасности
+            if offset > max_updates:
+                logging.warning("Reached max updates limit, stopping sync")
+                break
         
-        if added_count > 0:
+        # Сохраняем обновленный список
+        if len(subscribers) > initial_count:
             save_subscribers(subscribers)
-            logging.info("Synced %d new subscriber(s) from updates (total: %d)", added_count, len(subscribers))
-        
-        return added_count
+            added_count = len(subscribers) - initial_count
+            logging.info("Synced %d new subscriber(s) from /start commands (total: %d)", 
+                       added_count, len(subscribers))
+            return added_count
+        else:
+            logging.debug("No new subscribers found (total: %d)", len(subscribers))
+            return 0
         
     except Exception as e:
-        logging.error("Error syncing subscribers from updates: %s", e)
+        logging.error("Error syncing subscribers from /start commands: %s", e)
         return 0
 
 
@@ -171,7 +147,7 @@ def sync_subscribers_from_updates() -> int:
 def send_message(text: str, chat_id: Optional[str] = None) -> bool:
     """
     Отправляет текстовое сообщение в Telegram.
-    Если chat_id не указан, отправляет всем подписчикам.
+    Если chat_id не указан, отправляет всем подписчикам (кто нажал /start).
     
     Args:
         text: Текст сообщения
@@ -188,16 +164,16 @@ def send_message(text: str, chat_id: Optional[str] = None) -> bool:
     if chat_id:
         return _send_to_chat(text, chat_id)
     
-    # Иначе отправляем всем подписчикам
+    # Получаем список подписчиков
     subscribers = load_subscribers()
     
-    # Если подписчиков нет, пытаемся синхронизировать из обновлений
+    # Если подписчиков нет, пытаемся синхронизировать
     if not subscribers:
-        logging.info("No subscribers found, attempting to sync from bot updates...")
-        sync_subscribers_from_updates()
+        logging.info("No subscribers found, syncing from /start commands...")
+        sync_subscribers_from_start_commands()
         subscribers = load_subscribers()
     
-    # Если все еще нет подписчиков, используем старый способ (из конфига)
+    # Если все еще нет подписчиков, используем старый способ (из конфига) для обратной совместимости
     if not subscribers:
         try:
             from config_bot import TELEGRAM_CHAT_ID
@@ -209,14 +185,26 @@ def send_message(text: str, chat_id: Optional[str] = None) -> bool:
             pass
     
     if not subscribers:
-        logging.warning("No Telegram subscribers found and no chat ID configured, skipping message")
+        logging.warning("No Telegram subscribers found, skipping message")
         return False
     
     # Отправляем всем подписчикам
     success_count = 0
+    failed_chat_ids = []
+    
     for sub_chat_id in subscribers:
         if _send_to_chat(text, sub_chat_id):
             success_count += 1
+        else:
+            failed_chat_ids.append(sub_chat_id)
+    
+    # Удаляем недействительные chat_id
+    if failed_chat_ids:
+        subscribers = load_subscribers()
+        for chat_id in failed_chat_ids:
+            subscribers.discard(chat_id)
+        save_subscribers(subscribers)
+        logging.info("Removed %d invalid chat_id(s) from subscribers", len(failed_chat_ids))
     
     if success_count > 0:
         logging.debug("Telegram message sent to %d/%d subscriber(s)", success_count, len(subscribers))
@@ -249,14 +237,17 @@ def _send_to_chat(text: str, chat_id: str) -> bool:
         if response.status_code == 200:
             return True
         else:
-            # Если chat_id недействителен, удаляем его из подписчиков
-            if response.status_code == 400:
-                error_data = response.json()
-                if error_data.get('description', '').startswith('Bad Request: chat not found'):
-                    logging.warning("Chat ID %s not found, removing from subscribers", chat_id)
-                    remove_subscriber(chat_id)
-            logging.debug("Failed to send Telegram message to %s: HTTP %d - %s", 
-                        chat_id, response.status_code, response.text)
+            error_data = response.json() if response.content else {}
+            error_desc = error_data.get('description', '')
+            
+            # Удаляем недействительные chat_id
+            if (response.status_code == 400 and 
+                ('chat not found' in error_desc.lower() or 
+                 'chat_id is empty' in error_desc.lower())):
+                logging.debug("Chat ID %s is invalid, will be removed", chat_id)
+            elif response.status_code == 403:
+                logging.debug("Bot blocked by user %s", chat_id)
+            
             return False
     except Exception as e:
         logging.debug("Error sending Telegram message to %s: %s", chat_id, e)
