@@ -83,10 +83,14 @@ def _init_managers():
         _delays = Delays()
 
 
-def open_ads_power_profile(profile_id: str) -> Optional[Profile]:
+def open_ads_power_profile(profile_id: str, platform: str = "medium") -> Optional[Profile]:
     """
     Открывает и подготавливает профиль AdsPower для постинга.
     Возвращает Profile объект или None при ошибке.
+    
+    Args:
+        profile_id: ID профиля
+        platform: Платформа для постинга ("medium" или "quora")
     """
     _init_managers()
     
@@ -100,7 +104,7 @@ def open_ads_power_profile(profile_id: str) -> Optional[Profile]:
         logging.error("Profile No %d has no sequential_no mapping", profile_no)
         return None
     
-    logging.info("Opening profile: ID=%s, No=%d, Seq=%d", profile_id, profile_no, sequential_no)
+    logging.info("Opening profile: ID=%s, No=%d, Seq=%d for %s", profile_id, profile_no, sequential_no, platform)
     
     # Подготавливаем профиль
     profile = _profile_manager.ensure_ready(profile_no)
@@ -112,12 +116,18 @@ def open_ads_power_profile(profile_id: str) -> Optional[Profile]:
     if not _window_manager.focus(profile):
         logging.warning("Failed to focus/maximize window, but continuing...")
     
-    # Открываем Medium вкладку
-    if not _tab_manager.ensure_medium_tab_open(profile, _ui, _window_manager):
-        logging.error("Failed to open Medium tab for profile %d", profile_no)
-        return None
+    # Открываем вкладку в зависимости от платформы
+    if platform == "quora":
+        if not _tab_manager.ensure_quora_tab_open(profile, _ui, _window_manager):
+            logging.error("Failed to open Quora tab for profile %d", profile_no)
+            return None
+        logging.info("✓ Profile ready: window focused, Quora tab active")
+    else:
+        if not _tab_manager.ensure_medium_tab_open(profile, _ui, _window_manager):
+            logging.error("Failed to open Medium tab for profile %d", profile_no)
+            return None
+        logging.info("✓ Profile ready: window focused, Medium tab active")
     
-    logging.info("✓ Profile ready: window focused, Medium tab active")
     return profile
 
 
