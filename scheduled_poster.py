@@ -989,9 +989,17 @@ def main():
             
             # Пауза между статьями (если не последняя)
             current_article_id = article.get('id') if isinstance(article, dict) else article[0]
-            last_article_id = article_assignments[-1][4].get('id') if isinstance(article_assignments[-1][4], dict) else article_assignments[-1][4][0]
+            if all_article_assignments:
+                last_assignment = all_article_assignments[-1]
+                if len(last_assignment) >= 5:
+                    last_article = last_assignment[4]
+                    last_article_id = last_article.get('id') if isinstance(last_article, dict) else last_article[0]
+                else:
+                    last_article_id = None
+            else:
+                last_article_id = None
             
-            if current_article_id != last_article_id:
+            if last_article_id and current_article_id != last_article_id:
                 pause_time = random.uniform(3.0, 7.0)
                 logging.info("Waiting %.1f seconds before next article...", pause_time)
                 time.sleep(pause_time)
