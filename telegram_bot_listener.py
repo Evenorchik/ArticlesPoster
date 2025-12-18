@@ -34,19 +34,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.info(f"✓ New subscriber added: {chat_id} (total: {len(subscribers)})")
             
             await update.message.reply_text(
-                "✅ Вы подписаны на уведомления о постинге статей!\n\n"
-                "Теперь вы будете получать уведомления о запуске постинга и завершении работы."
+                "✅ You are now subscribed to article posting notifications!\n\n"
+                "You will receive notifications when posting starts and when it completes."
             )
         else:
             logging.info(f"User {chat_id} already subscribed (total: {len(subscribers)})")
             await update.message.reply_text(
-                "✅ Вы уже подписаны на уведомления!"
+                "✅ You are already subscribed to notifications!"
             )
     except Exception as e:
         logging.error(f"Error in start_command: {e}", exc_info=True)
         if update.message:
             try:
-                await update.message.reply_text("❌ Произошла ошибка при обработке команды. Попробуйте позже.")
+                await update.message.reply_text("❌ An error occurred while processing the command. Please try again later.")
             except:
                 pass
 

@@ -1,6 +1,6 @@
 """
-Telegram бот для уведомлений о постинге статей на Medium и Quora.
-Отправляет уведомления всем пользователям, которые нажали /start в боте.
+Telegram bot for article posting notifications on Medium and Quora.
+Sends notifications to all users who pressed /start in the bot.
 """
 import logging
 import json
@@ -14,18 +14,18 @@ from config_bot import TELEGRAM_BOT_TOKEN
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# Файл для хранения подписчиков (тех, кто нажал /start)
+# File to store subscribers (those who pressed /start)
 SUBSCRIBERS_FILE = "telegram_subscribers.json"
 
 
-# ==================== УПРАВЛЕНИЕ ПОДПИСЧИКАМИ ====================
+# ==================== SUBSCRIBER MANAGEMENT ====================
 
 def load_subscribers() -> Set[str]:
     """
-    Загружает список chat_id подписчиков из файла.
+    Loads the list of subscriber chat_ids from file.
     
     Returns:
-        Множество chat_id подписчиков
+        Set of subscriber chat_ids
     """
     if not os.path.exists(SUBSCRIBERS_FILE):
         return set()
@@ -46,10 +46,10 @@ def load_subscribers() -> Set[str]:
 
 def save_subscribers(subscribers: Set[str]) -> None:
     """
-    Сохраняет список chat_id подписчиков в файл.
+    Saves the list of subscriber chat_ids to file.
     
     Args:
-        subscribers: Множество chat_id подписчиков
+        subscribers: Set of subscriber chat_ids
     """
     try:
         with open(SUBSCRIBERS_FILE, 'w', encoding='utf-8') as f:
@@ -61,11 +61,11 @@ def save_subscribers(subscribers: Set[str]) -> None:
 
 def sync_subscribers_from_start_commands() -> int:
     """
-    Синхронизирует список подписчиков из обновлений бота.
-    Находит всех пользователей, которые отправили команду /start.
+    Syncs subscriber list from bot updates.
+    Finds all users who sent the /start command.
     
     Returns:
-        Количество найденных подписчиков
+        Number of found subscribers
     """
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logging.warning("Telegram bot token not configured, skipping sync")
@@ -75,10 +75,10 @@ def sync_subscribers_from_start_commands() -> int:
         subscribers = load_subscribers()
         initial_count = len(subscribers)
         
-        # Получаем все обновления
+        # Get all updates
         url = f"{TELEGRAM_API_URL}/getUpdates"
         offset = 0
-        max_updates = 1000  # Ограничение для безопасности
+        max_updates = 1000  # Safety limit
         
         while True:
             params = {
@@ -102,7 +102,7 @@ def sync_subscribers_from_start_commands() -> int:
             if not updates:
                 break
             
-            # Обрабатываем обновления
+            # Process updates
             for update in updates:
                 update_id = update.get('update_id', 0)
                 offset = max(offset, update_id + 1)
@@ -111,7 +111,7 @@ def sync_subscribers_from_start_commands() -> int:
                 if not message:
                     continue
                 
-                # Проверяем, есть ли команда /start
+                # Check if there's a /start command
                 text = message.get('text', '').strip()
                 if text == '/start' or text.startswith('/start '):
                     chat = message.get('chat', {})
@@ -121,12 +121,12 @@ def sync_subscribers_from_start_commands() -> int:
                         subscribers.add(chat_id)
                         logging.info("Found new subscriber from /start command: %s", chat_id)
             
-            # Ограничение для безопасности
+            # Safety limit
             if offset > max_updates:
                 logging.warning("Reached max updates limit, stopping sync")
                 break
         
-        # Сохраняем обновленный список
+        # Save updated list
         if len(subscribers) > initial_count:
             save_subscribers(subscribers)
             added_count = len(subscribers) - initial_count
@@ -142,38 +142,38 @@ def sync_subscribers_from_start_commands() -> int:
         return 0
 
 
-# ==================== ОТПРАВКА СООБЩЕНИЙ ====================
+# ==================== MESSAGE SENDING ====================
 
 def send_message(text: str, chat_id: Optional[str] = None) -> bool:
     """
-    Отправляет текстовое сообщение в Telegram.
-    Если chat_id не указан, отправляет всем подписчикам (кто нажал /start).
+    Sends a text message to Telegram.
+    If chat_id is not specified, sends to all subscribers (who pressed /start).
     
     Args:
-        text: Текст сообщения
-        chat_id: Конкретный chat_id для отправки (опционально)
+        text: Message text
+        chat_id: Specific chat_id to send to (optional)
         
     Returns:
-        True если успешно отправлено хотя бы одному получателю, False при ошибке
+        True if successfully sent to at least one recipient, False on error
     """
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         logging.warning("Telegram bot token not configured, skipping message")
         return False
     
-    # Если указан конкретный chat_id, отправляем только ему
+    # If specific chat_id is provided, send only to that one
     if chat_id:
         return _send_to_chat(text, chat_id)
     
-    # Получаем список подписчиков
+    # Get subscriber list
     subscribers = load_subscribers()
     
-    # Если подписчиков нет, пытаемся синхронизировать
+    # If no subscribers, try to sync
     if not subscribers:
         logging.info("No subscribers found, syncing from /start commands...")
         sync_subscribers_from_start_commands()
         subscribers = load_subscribers()
     
-    # Если все еще нет подписчиков, используем старый способ (из конфига) для обратной совместимости
+    # If still no subscribers, use old method (from config) for backward compatibility
     if not subscribers:
         try:
             from config_bot import TELEGRAM_CHAT_ID
@@ -188,7 +188,7 @@ def send_message(text: str, chat_id: Optional[str] = None) -> bool:
         logging.warning("No Telegram subscribers found, skipping message")
         return False
     
-    # Отправляем всем подписчикам
+    # Send to all subscribers
     success_count = 0
     failed_chat_ids = []
     
@@ -198,7 +198,7 @@ def send_message(text: str, chat_id: Optional[str] = None) -> bool:
         else:
             failed_chat_ids.append(sub_chat_id)
     
-    # Удаляем недействительные chat_id
+    # Remove invalid chat_ids
     if failed_chat_ids:
         subscribers = load_subscribers()
         for chat_id in failed_chat_ids:
@@ -216,14 +216,14 @@ def send_message(text: str, chat_id: Optional[str] = None) -> bool:
 
 def _send_to_chat(text: str, chat_id: str) -> bool:
     """
-    Внутренняя функция для отправки сообщения конкретному chat_id.
+    Internal function to send message to a specific chat_id.
     
     Args:
-        text: Текст сообщения
-        chat_id: Chat ID получателя
+        text: Message text
+        chat_id: Recipient chat ID
         
     Returns:
-        True если успешно, False при ошибке
+        True if successful, False on error
     """
     url = f"{TELEGRAM_API_URL}/sendMessage"
     payload = {
@@ -240,7 +240,7 @@ def _send_to_chat(text: str, chat_id: str) -> bool:
             error_data = response.json() if response.content else {}
             error_desc = error_data.get('description', '')
             
-            # Удаляем недействительные chat_id
+            # Remove invalid chat_ids
             if (response.status_code == 400 and 
                 ('chat not found' in error_desc.lower() or 
                  'chat_id is empty' in error_desc.lower())):
@@ -254,18 +254,18 @@ def _send_to_chat(text: str, chat_id: str) -> bool:
         return False
 
 
-# ==================== УВЕДОМЛЕНИЯ ====================
+# ==================== NOTIFICATIONS ====================
 
 def notify_poster_started(table_name: str, article_assignments: List) -> bool:
     """
-    Отправляет уведомление о запуске автопостера с расписанием постинга.
+    Sends notification about auto-poster start with posting schedule.
     
     Args:
-        table_name: Название таблицы
-        article_assignments: Список кортежей (profile_id, profile_no, seq_no, posting_time, article)
+        table_name: Table name
+        article_assignments: List of tuples (profile_id, profile_no, seq_no, posting_time, article)
         
     Returns:
-        True если успешно, False при ошибке
+        True if successful, False on error
     """
     from datetime import datetime
     import pytz
@@ -283,7 +283,7 @@ def notify_poster_started(table_name: str, article_assignments: List) -> bool:
         is_link = article.get('is_link', 'no') if isinstance(article, dict) else 'no'
         time_str = posting_time.strftime("%H:%M")
         
-        # Определяем, есть ли ссылка в статье
+        # Determine if article has a link
         link_indicator = "🔗" if is_link == 'yes' else "📄"
         
         text += f"{link_indicator} <b>Profile Seq:{seq_no}</b> (No:{profile_no}) → <b>{time_str}</b> (Kiev time)\n"
@@ -307,30 +307,30 @@ def notify_article_posted(
     profile_id: str
 ) -> bool:
     """
-    Отправляет уведомление о публикации статьи.
+    Sends notification about article publication.
     
     Args:
-        title: Заголовок статьи
-        body: Текст статьи (будет обрезан до 200 символов)
-        hashtags: Список хэштегов
-        url: URL опубликованной статьи
-        has_link: Есть ли в статье ссылка
-        profile_no: Внутренний номер профиля
-        sequential_no: Порядковый номер профиля (1-10)
-        profile_id: ID профиля в Ads Power
+        title: Article title
+        body: Article text (will be truncated to 200 characters)
+        hashtags: List of hashtags
+        url: Published article URL
+        has_link: Whether article has a link
+        profile_no: Internal profile number
+        sequential_no: Sequential profile number (1-10)
+        profile_id: Profile ID in Ads Power
         
     Returns:
-        True если успешно, False при ошибке
+        True if successful, False on error
     """
-    # Обрезаем body до 200 символов
+    # Truncate body to 200 characters
     body_preview = body[:200] + "..." if len(body) > 200 else body
     
-    # Экранируем HTML-символы в тексте
+    # Escape HTML characters in text
     title_escaped = html.escape(title)
     body_escaped = html.escape(body_preview)
     tags_escaped = html.escape(", ".join(hashtags) if hashtags else "none")
     
-    # Формируем информацию о ссылке
+    # Form link information
     link_status = "yes" if has_link else "no"
     
     text = (
@@ -348,19 +348,19 @@ def notify_article_posted(
 
 def notify_posting_complete(posted_articles: List[dict]) -> bool:
     """
-    Отправляет финальный отчет о запощенных статьях.
+    Sends final report about posted articles.
     
     Args:
-        posted_articles: Список словарей с информацией о запощенных статьях:
-            - topic: Тема статьи
-            - profile_seq: Sequential номер профиля
-            - profile_no: Номер профиля
-            - url: URL опубликованной статьи
-            - has_link: Есть ли в статье ссылка (is_link='yes')
-            - article_link: Ссылка из статьи (для is_link='yes')
+        posted_articles: List of dictionaries with information about posted articles:
+            - topic: Article topic
+            - profile_seq: Sequential profile number
+            - profile_no: Profile number
+            - url: Published article URL
+            - has_link: Whether article has a link (is_link='yes')
+            - article_link: Link from article (for is_link='yes')
         
     Returns:
-        True если успешно, False при ошибке
+        True if successful, False on error
     """
     if not posted_articles:
         text = "<b>📊 Posting Report</b>\n\n"
@@ -380,7 +380,7 @@ def notify_posting_complete(posted_articles: List[dict]) -> bool:
         article_link = article_info.get('article_link', '')
         platform = article_info.get('platform', 'medium').upper()
         
-        # Экранируем HTML
+        # Escape HTML
         topic_escaped = html.escape(str(topic)[:60])
         
         text += f"<b>{i}. {topic_escaped}</b>\n"
@@ -388,7 +388,7 @@ def notify_posting_complete(posted_articles: List[dict]) -> bool:
         text += f"   👤 Profile: Seq {profile_seq} (No {profile_no})\n"
         text += f"   🔗 Article URL: {url}\n"
         
-        # Если в статье есть ссылка, показываем её
+        # If article has a link, show it
         if has_link and article_link:
             text += f"   🔗 Link in article: {article_link}\n"
         elif has_link:
