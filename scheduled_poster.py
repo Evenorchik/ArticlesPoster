@@ -41,7 +41,7 @@ from poster.medium import publish_article, fetch_published_url
 from poster.quora import publish_article as publish_article_quora, fetch_published_url as fetch_published_url_quora
 from poster.models import Profile
 from poster.link_replacer import update_article_body_with_replaced_link
-from config import LOG_LEVEL, LOG_MODE
+from config import LOG_LEVEL, LOG_MODE, TIME_CONFIG
 from psycopg import sql
 from telegram_bot import notify_poster_started, notify_article_posted, notify_posting_complete
 
@@ -53,13 +53,36 @@ logging.basicConfig(
 
 # Константы
 KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')  # Киевское время (UTC+2/UTC+3)
-MEDIUM_POSTING_START_HOUR = 19.5   # 19:30 (19 + 30/60 = 19.5)
-MEDIUM_POSTING_END_HOUR = 20.333   # 20:20 (20 + 20/60 = 20.333...)
-QUORA_POSTING_START_HOUR = 20.5    # 20:30 (20 + 30/60 = 20.5)
-QUORA_POSTING_END_HOUR = 21.5      # 21:30 (21 + 30/60 = 21.5)
 ARTICLES_NO_LINK_COUNT = 4  # Статей с is_link='no' в день (для каждой платформы)
 ARTICLES_WITH_LINK_COUNT = 1  # Статей с is_link='yes' в день (для каждой платформы)
 IMAGES_ROOT_DIR = "./data/images"  # Папка с изображениями для обложек
+
+
+def parse_time_to_hour(time_str: str) -> float:
+    """
+    Парсит время в формате "HH:MM" в float (часы).
+    Например: "19:30" -> 19.5
+    """
+    try:
+        parts = time_str.split(':')
+        hour = int(parts[0])
+        minute = int(parts[1])
+        return float(hour) + float(minute) / 60.0
+    except (ValueError, IndexError) as e:
+        logging.error("Invalid time format '%s': %s", time_str, e)
+        raise
+
+
+def get_posting_times():
+    """
+    Получает время постинга из TIME_CONFIG.
+    Возвращает (medium_start, medium_end, quora_start, quora_end) в формате float.
+    """
+    medium_start = parse_time_to_hour(TIME_CONFIG["MEDIUM_START"])
+    medium_end = parse_time_to_hour(TIME_CONFIG["MEDIUM_END"])
+    quora_start = parse_time_to_hour(TIME_CONFIG["QUORA_START"])
+    quora_end = parse_time_to_hour(TIME_CONFIG["QUORA_END"])
+    return medium_start, medium_end, quora_start, quora_end
 
 # Глобальные менеджеры для работы с профилями (инициализируются в main())
 _profile_manager: Optional[ProfileManager] = None
@@ -619,43 +642,16 @@ def main():
             logging.error("Invalid choice! Please enter 1, 2, or 3.")
             return
         
-        # Ввод времени постинга для Medium (если выбрано)
-        medium_start_hour = None
-        medium_end_hour = None
-        if post_medium:
-            logging.info("")
-            logging.info("Enter posting time range for Medium (Kiev time):")
-            medium_start_input = input("  Start time (HH:MM, e.g., 19:30): ").strip()
-            medium_end_input = input("  End time (HH:MM, e.g., 20:20): ").strip()
-            
-            try:
-                medium_start_parts = medium_start_input.split(':')
-                medium_start_hour = float(medium_start_parts[0]) + float(medium_start_parts[1]) / 60.0
-                medium_end_parts = medium_end_input.split(':')
-                medium_end_hour = float(medium_end_parts[0]) + float(medium_end_parts[1]) / 60.0
-            except (ValueError, IndexError):
-                logging.error("Invalid time format! Using defaults.")
-                medium_start_hour = MEDIUM_POSTING_START_HOUR
-                medium_end_hour = MEDIUM_POSTING_END_HOUR
-        
-        # Ввод времени постинга для Quora (если выбрано)
-        quora_start_hour = None
-        quora_end_hour = None
-        if post_quora:
-            logging.info("")
-            logging.info("Enter posting time range for Quora (Kiev time):")
-            quora_start_input = input("  Start time (HH:MM, e.g., 20:30): ").strip()
-            quora_end_input = input("  End time (HH:MM, e.g., 21:30): ").strip()
-            
-            try:
-                quora_start_parts = quora_start_input.split(':')
-                quora_start_hour = float(quora_start_parts[0]) + float(quora_start_parts[1]) / 60.0
-                quora_end_parts = quora_end_input.split(':')
-                quora_end_hour = float(quora_end_parts[0]) + float(quora_end_parts[1]) / 60.0
-            except (ValueError, IndexError):
-                logging.error("Invalid time format! Using defaults.")
-                quora_start_hour = QUORA_POSTING_START_HOUR
-                quora_end_hour = QUORA_POSTING_END_HOUR
+        # Получаем время постинга из конфига
+        logging.info("")
+        logging.info("Reading posting times from config...")
+        try:
+            medium_start_hour, medium_end_hour, quora_start_hour, quora_end_hour = get_posting_times()
+            logging.info("  Medium: %s - %s", TIME_CONFIG["MEDIUM_START"], TIME_CONFIG["MEDIUM_END"])
+            logging.info("  Quora: %s - %s", TIME_CONFIG["QUORA_START"], TIME_CONFIG["QUORA_END"])
+        except Exception as e:
+            logging.error("Failed to parse time from config: %s", e)
+            return
         
         # Проверка на пересечение временных диапазонов (только если выбраны обе платформы)
         if post_medium and post_quora:
@@ -931,8 +927,8 @@ def main():
                         actual_time = datetime.now(KIEV_TIMEZONE)
                         log_summary(article_topic, seq_no, actual_time, url)
                     else:
-                        # В режиме DEBUG уже есть полное логирование из post_article_to_medium
-                        logging.info("✓ Article ID %s posted successfully!", article_id)
+                        # В режиме DEBUG уже есть полное логирование из post_article_to_medium/post_article_to_quora
+                        logging.info("✓ Article ID %s posted successfully on %s!", article_id, platform.upper())
                     
                     # Отправляем уведомление в Telegram о публикации статьи
                     try:
@@ -973,7 +969,7 @@ def main():
                     time.sleep(2)
                 else:
                     failed_count += 1
-                    logging.error("✗ Failed to post article ID %s", article_id)
+                    logging.error("✗ Failed to post article ID %s on %s", article_id, platform.upper())
                     
                     # Сворачиваем окно даже при ошибке
                     minimize_profile_window(profile_no)
@@ -1019,13 +1015,68 @@ def main():
             except Exception as e:
                 logging.warning("Failed to send Telegram posting report: %s", e)
         
+        # Ждем до следующего дня и перезапускаем
+        logging.info("")
+        logging.info("="*60)
+        logging.info("Waiting for next day...")
+        logging.info("="*60)
+        
+        # Вычисляем время начала следующего дня (00:00 следующего дня)
+        now = datetime.now(KIEV_TIMEZONE)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        wait_seconds = (tomorrow - now).total_seconds()
+        
+        logging.info("Next posting cycle will start at: %s (Kiev time)", tomorrow.strftime("%Y-%m-%d %H:%M"))
+        logging.info("Waiting %.1f hours (%.1f minutes) until next day...", 
+                    wait_seconds / 3600, wait_seconds / 60)
+        
+        # Ждем до следующего дня с периодическими проверками
+        while datetime.now(KIEV_TIMEZONE) < tomorrow:
+            remaining = (tomorrow - datetime.now(KIEV_TIMEZONE)).total_seconds()
+            if remaining > 3600:  # Если больше часа - ждем по часу
+                time.sleep(3600)
+                hours_left = remaining / 3600
+                logging.info("Still waiting... %.1f hours remaining until next day", hours_left)
+            elif remaining > 300:  # Если больше 5 минут - ждем по 5 минут
+                time.sleep(300)
+                minutes_left = remaining / 60
+                logging.info("Still waiting... %.1f minutes remaining until next day", minutes_left)
+            else:  # Меньше 5 минут - ждем оставшееся время
+                time.sleep(remaining)
+                break
+        
+        logging.info("")
+        logging.info("="*60)
+        logging.info("Next day reached! Restarting posting cycle...")
+        logging.info("="*60)
+        logging.info("")
+        
+        # Закрываем соединение с БД перед перезапуском
+        pg_conn.close()
+        logging.info("PostgreSQL connection closed (will reconnect for next cycle)")
+        time.sleep(2)
+        
+        # Рекурсивный вызов для следующего дня
+        main()
+        
     except KeyboardInterrupt:
         logging.warning("Interrupted by user")
+        # Закрываем соединение при прерывании
+        try:
+            pg_conn.close()
+            logging.info("PostgreSQL connection closed")
+        except:
+            pass
     except Exception as e:
         logging.error("Fatal error: %s", e, exc_info=True)
-    finally:
-        pg_conn.close()
-        logging.info("PostgreSQL connection closed")
+        # Закрываем соединение при ошибке
+        try:
+            pg_conn.close()
+            logging.info("PostgreSQL connection closed")
+        except:
+            pass
+        # При ошибке не перезапускаем - останавливаемся
+        logging.error("Stopping scheduled poster due to error")
 
 
 if __name__ == "__main__":
