@@ -102,8 +102,18 @@ def publish_article(
     logging.info("STEP 5: Entering article title...")
     logging.info("  Title length: %d characters", len(title))
     try:
+        # Очищаем поле перед вставкой (Ctrl+A, затем Delete)
+        logging.info("  Clearing text field...")
+        ui.hotkey('ctrl', 'a')
+        ui.sleep(1)
+        ui.press('delete')
+        ui.sleep(1)
+        
+        # Копируем и вставляем title
+        logging.info("  Copying title to clipboard...")
         pyperclip.copy(title)
-        ui.sleep(0.5)
+        ui.sleep(1)
+        logging.info("  Pasting title...")
         ui.hotkey('ctrl', 'v')
         logging.info("  ✓ Title pasted successfully")
         ui.sleep(1)
