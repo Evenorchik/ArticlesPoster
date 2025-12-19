@@ -149,16 +149,18 @@ def publish_article(
         return False
 
     # STEP 8: Click on image upload button
-    logging.info("STEP 8: Clicking on image upload button...")
-    logging.info("  Coordinates: %s", coords.QUORA_IMAGE_UPLOAD)
-    try:
-        ui.screenshot_on_click(coords.QUORA_IMAGE_UPLOAD, label="STEP 8: image upload click")
-        ui.sleep(1)
-        ui.click(*coords.QUORA_IMAGE_UPLOAD)
-        logging.info("  ✓ Image upload button clicked successfully")
-    except Exception as e:
-        logging.error("  ✗ Failed to click: %s", e)
-        return False
+    # ЗАКОММЕНТИРОВАНО: Пропускаем клик на кнопку, input уже есть в DOM
+    # logging.info("STEP 8: Clicking on image upload button...")
+    # logging.info("  Coordinates: %s", coords.QUORA_IMAGE_UPLOAD)
+    # try:
+    #     ui.screenshot_on_click(coords.QUORA_IMAGE_UPLOAD, label="STEP 8: image upload click")
+    #     ui.sleep(1)
+    #     ui.click(*coords.QUORA_IMAGE_UPLOAD)
+    #     logging.info("  ✓ Image upload button clicked successfully")
+    # except Exception as e:
+    #     logging.error("  ✗ Failed to click: %s", e)
+    #     return False
+    logging.info("STEP 8: Skipping image upload button click (input already in DOM)")
 
     # STEP 9: Attach cover image via Selenium
     if cover_image_name:
