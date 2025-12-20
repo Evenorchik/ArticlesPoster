@@ -4,7 +4,7 @@
 Процесс:
 1) Получает статьи из БД (id, title, cover_image_name)
 2) Если cover_image_name уже заполнен — пропускает статью
-3) Для остальных генерирует промпт обложки через GPT
+3) Для остальных генерирует промпт обложки через OpenAI Chat Completions
 4) Генерирует изображение через выбранный backend:
    - OpenAI GPT Image (Images API, b64_json)
    - Google NanoBanana Pro (Gemini API, gemini-3-pro-image-preview)
@@ -24,6 +24,7 @@ import logging
 import time
 import base64
 import requests
+import tempfile
 from io import BytesIO
 from typing import Optional, List, Tuple, Any, Literal
 
@@ -32,7 +33,7 @@ from config import (
     OPENAI_API_KEY,
     OPENAI_MODEL_COVER_PROMPT,
     OPENAI_IMAGE_MODEL,
-    GOOGLE_API_KEY,  # <-- ключ Google у вас лежит в этой переменной
+    GOOGLE_API_KEY,
 )
 from poster.db import get_pg_conn, get_refined_articles_tables
 
@@ -66,9 +67,7 @@ COVER_PROMPT_TEMPLATE = """Вот тебе заголовок нашей ста�
 
 
 def choose_image_backend() -> ImageBackend:
-    """
-    На старте предлагает выбрать, через какую модель генерировать изображение.
-    """
+    """На старте предлагает выбрать, через какую модель генерировать изображение."""
     print("\nSelect image generation backend:")
     print("  1) OpenAI GPT Image")
     print("  2) Google NanoBanana Pro (gemini-3-pro-image-preview)")
@@ -90,11 +89,11 @@ def get_openai_image_generation_params() -> dict:
     Всегда сохраняем JPEG.
     """
     return {
-        "model": OPENAI_IMAGE_MODEL,   # например: "gpt-image-1.5" или "gpt-image-1"
+        "model": OPENAI_IMAGE_MODEL,
         "size": "1536x1024",
         "quality": "medium",
         "n": 1,
-        "output_format": "jpeg",       # ВСЕГДА JPEG
+        "output_format": "jpeg",  # ВСЕГДА JPEG
     }
 
 
@@ -138,7 +137,7 @@ def ensure_cover_image_column(pg_conn, table_name: str) -> None:
 
 
 def generate_cover_prompt(title: str) -> Optional[str]:
-    """Генерирует промпт для обложки на основе заголовка статьи."""
+    """Генерирует промпт для обложки на основе заголовка статьи (через OpenAI Chat Completions)."""
     logging.info("Generating cover prompt for title: %s", title)
 
     try:
@@ -183,27 +182,83 @@ def _init_google_genai_client():
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
-def _pil_image_to_jpeg_bytes(pil_img, quality: int = 95) -> bytes:
-    """
-    Конвертирует PIL image в JPEG bytes (RGB).
-    Требует Pillow:
-      pip install pillow
-    """
+def _require_pillow():
     try:
         from PIL import Image  # noqa: F401
     except Exception as e:
         raise RuntimeError(
-            "Для Google backend нужно конвертировать картинку в JPEG, "
+            "Для Google backend нужна конвертация изображения в JPEG, "
             "но Pillow не установлен. Установите: pip install pillow"
         ) from e
 
-    # Gemini может вернуть RGBA/LA — для JPEG нужен RGB
-    if getattr(pil_img, "mode", None) != "RGB":
+
+def _pil_to_jpeg_bytes(pil_img, quality: int = 95) -> bytes:
+    """PIL.Image.Image -> JPEG bytes (RGB)."""
+    _require_pillow()
+    # для JPEG нужен RGB
+    if getattr(pil_img, "mode", None) != "RGB" and hasattr(pil_img, "convert"):
         pil_img = pil_img.convert("RGB")
 
     buf = BytesIO()
     pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
     return buf.getvalue()
+
+
+def _image_object_to_jpeg_bytes(img_obj, quality: int = 95) -> bytes:
+    """
+    Универсальная конвертация в JPEG bytes.
+
+    Поддерживает:
+    - PIL.Image.Image (есть .convert и .save)
+    - google.genai.types.Image (обычно есть .show/.save и/или .data/.mime_type)
+    - другие wrapper-объекты, если из них можно вытащить байты или сохранить
+    """
+    _require_pillow()
+    from PIL import Image
+
+    # 1) Если это уже PIL-like (есть convert + save)
+    if hasattr(img_obj, "convert") and hasattr(img_obj, "save"):
+        return _pil_to_jpeg_bytes(img_obj, quality=quality)
+
+    # 2) Если wrapper хранит PIL внутри (частые имена)
+    for attr in ("pil_image", "image", "_image", "_pil_image"):
+        inner = getattr(img_obj, attr, None)
+        if inner is not None and hasattr(inner, "convert") and hasattr(inner, "save"):
+            return _pil_to_jpeg_bytes(inner, quality=quality)
+
+    # 3) Если wrapper хранит bytes (частые имена)
+    for attr in ("data", "_data", "bytes", "_bytes", "content", "_content"):
+        b = getattr(img_obj, attr, None)
+        if isinstance(b, (bytes, bytearray)) and b:
+            pil = Image.open(BytesIO(bytes(b)))
+            return _pil_to_jpeg_bytes(pil, quality=quality)
+
+    # 4) Попытка сохранить в BytesIO через save()
+    if hasattr(img_obj, "save"):
+        buf = BytesIO()
+        try:
+            # некоторые реализации принимают file-like
+            img_obj.save(buf, format="JPEG")
+            data = buf.getvalue()
+            if data:
+                return data
+        except TypeError:
+            # возможно, save() принимает только путь
+            pass
+        except Exception:
+            pass
+
+        # 5) Если save() принимает только путь — временный файл
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmp:
+            try:
+                img_obj.save(tmp.name)
+                tmp.flush()
+                tmp.seek(0)
+                return tmp.read()
+            except Exception as e:
+                raise RuntimeError(f"Could not save Google Image object to temp file: {e}") from e
+
+    raise RuntimeError(f"Unsupported image object type: {type(img_obj)} (no convert/save/data)")
 
 
 def generate_image_bytes_openai(image_prompt: str) -> Tuple[Optional[bytes], Optional[str]]:
@@ -254,8 +309,7 @@ def generate_image_bytes_google(image_prompt: str, google_client) -> Tuple[Optio
       model="gemini-3-pro-image-preview"
       image_size="2K"
       aspect_ratio="3:2"
-
-    Возвращает (bytes, "jpg").
+    Возвращает (jpeg_bytes, "jpg").
     """
     logging.info(
         "Generating image (Google NanoBanana Pro) with prompt: %s",
@@ -265,15 +319,13 @@ def generate_image_bytes_google(image_prompt: str, google_client) -> Tuple[Optio
     try:
         from google.genai import types  # type: ignore
 
-        # Держим aspect ratio близко к OpenAI (1536x1024 ~= 3:2)
-        aspect_ratio = "16:9"
-        image_size = "2K"  # 2K как вы просили (K должна быть uppercase)
+        aspect_ratio = "16:9"  # близко к 1536x1024
+        image_size = "2K"     # как ты хотел
 
         response = google_client.models.generate_content(
             model="gemini-3-pro-image-preview",
-            contents=image_prompt,
+            contents=[image_prompt],
             config=types.GenerateContentConfig(
-                # Можно ['TEXT','IMAGE'], но нам нужно изображение:
                 response_modalities=["IMAGE"],
                 image_config=types.ImageConfig(
                     aspect_ratio=aspect_ratio,
@@ -282,45 +334,13 @@ def generate_image_bytes_google(image_prompt: str, google_client) -> Tuple[Optio
             ),
         )
 
-        # В ответе могут быть parts с изображением (inline_data / as_image()).
+        # По докам: response.parts, части могут содержать inline_data и as_image()
         for part in getattr(response, "parts", []) or []:
-            # Самый удобный путь по докам — part.as_image() (PIL image)
-            try:
-                img = part.as_image()
-            except Exception:
-                img = None
-
-            if img is not None:
-                jpeg_bytes = _pil_image_to_jpeg_bytes(img, quality=95)
+            if getattr(part, "inline_data", None):
+                img_obj = part.as_image()
+                jpeg_bytes = _image_object_to_jpeg_bytes(img_obj, quality=95)
                 logging.info("  ✓ Google image generated and converted to JPEG (%d bytes)", len(jpeg_bytes))
                 return jpeg_bytes, "jpg"
-
-            # На всякий случай: если SDK даст доступ к inline_data
-            inline = getattr(part, "inline_data", None)
-            if inline is not None:
-                data = getattr(inline, "data", None)
-                # data может быть bytes или base64-string; попробуем оба
-                if isinstance(data, (bytes, bytearray)) and data:
-                    # Не гарантируем формат => попробуем через PIL -> JPEG
-                    try:
-                        from PIL import Image
-                        pil_img = Image.open(BytesIO(data))
-                        jpeg_bytes = _pil_image_to_jpeg_bytes(pil_img, quality=95)
-                        logging.info("  ✓ Google inline_data converted to JPEG (%d bytes)", len(jpeg_bytes))
-                        return jpeg_bytes, "jpg"
-                    except Exception:
-                        # если уже JPEG-байты, можно вернуть как есть
-                        return bytes(data), "jpg"
-                if isinstance(data, str) and data.strip():
-                    raw = base64.b64decode(data)
-                    try:
-                        from PIL import Image
-                        pil_img = Image.open(BytesIO(raw))
-                        jpeg_bytes = _pil_image_to_jpeg_bytes(pil_img, quality=95)
-                        logging.info("  ✓ Google base64 inline_data converted to JPEG (%d bytes)", len(jpeg_bytes))
-                        return jpeg_bytes, "jpg"
-                    except Exception:
-                        return raw, "jpg"
 
         logging.error("  ✗ Google response contained no image parts.")
         return None, None
@@ -330,7 +350,11 @@ def generate_image_bytes_google(image_prompt: str, google_client) -> Tuple[Optio
         return None, None
 
 
-def generate_image_bytes(image_backend: ImageBackend, image_prompt: str, google_client=None) -> Tuple[Optional[bytes], Optional[str]]:
+def generate_image_bytes(
+    image_backend: ImageBackend,
+    image_prompt: str,
+    google_client=None
+) -> Tuple[Optional[bytes], Optional[str]]:
     """Маршрутизатор генерации изображения по выбранному backend."""
     if image_backend == "openai":
         return generate_image_bytes_openai(image_prompt)
@@ -443,7 +467,7 @@ def generate_cover_for_article(
     title: str,
     images_dir: str,
     image_backend: ImageBackend,
-    google_client=None
+    google_client=None,
 ) -> bool:
     """Генерирует обложку для одной статьи."""
     logging.info("")
@@ -482,7 +506,6 @@ def main():
     logging.info("Cover Image Generator")
     logging.info("=" * 60)
 
-    # НОВОЕ: выбор модели генерации изображения
     image_backend = choose_image_backend()
 
     google_client = None
@@ -574,7 +597,7 @@ def main():
                     title=title,
                     images_dir=images_dir,
                     image_backend=image_backend,
-                    google_client=google_client
+                    google_client=google_client,
                 )
                 if ok:
                     success_count += 1
