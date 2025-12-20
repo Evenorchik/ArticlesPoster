@@ -1,18 +1,22 @@
 """
-Скрипт для генерации обложек статей с помощью OpenAI GPT-Image 1.5.
+Скрипт для генерации обложек статей.
 
 Процесс:
 1) Получает статьи из БД (id, title, cover_image_name)
 2) Если cover_image_name уже заполнен — пропускает статью
 3) Для остальных генерирует промпт обложки через GPT
-4) Генерирует изображение через GPT-Image 1.5 (берём b64_json, а не url)
+4) Генерирует изображение через выбранный backend:
+   - OpenAI GPT Image (Images API, b64_json)
+   - Google NanoBanana Pro (Gemini API, gemini-3-pro-image-preview)
 5) Сохраняет изображение в data/images как cover_image_{id}.jpg (JPEG)
 6) Обновляет cover_image_name в БД
 
 Зависимости:
-- openai (Python SDK)
+- openai
 - requests
 - psycopg / psycopg2
+- (опционально для Google) google-genai
+- (опционально для Google) Pillow
 """
 
 import os
@@ -20,13 +24,15 @@ import logging
 import time
 import base64
 import requests
-from typing import Optional, List, Tuple, Any
+from io import BytesIO
+from typing import Optional, List, Tuple, Any, Literal
 
 from openai import OpenAI
 from config import (
     OPENAI_API_KEY,
     OPENAI_MODEL_COVER_PROMPT,
     OPENAI_IMAGE_MODEL,
+    GOOGLE_API_KEY,  # <-- ключ Google у вас лежит в этой переменной
 )
 from poster.db import get_pg_conn, get_refined_articles_tables
 
@@ -45,6 +51,9 @@ except ImportError:
 # Инициализация OpenAI клиента
 OPENAI_CLIENT = OpenAI(api_key=OPENAI_API_KEY)
 
+# Тип выбора бэкенда
+ImageBackend = Literal["openai", "google"]
+
 # Промпт для генерации промпта обложки
 COVER_PROMPT_TEMPLATE = """Вот тебе заголовок нашей статьи, напиши идеальный промт для обложки для этой статьи.
 
@@ -56,16 +65,32 @@ COVER_PROMPT_TEMPLATE = """Вот тебе заголовок нашей ста�
 """
 
 
-def get_image_generation_params() -> dict:
+def choose_image_backend() -> ImageBackend:
     """
-    Параметры для генерации изображений через GPT-Image 1.5.
+    На старте предлагает выбрать, через какую модель генерировать изображение.
+    """
+    print("\nSelect image generation backend:")
+    print("  1) OpenAI GPT Image")
+    print("  2) Google NanoBanana Pro (gemini-3-pro-image-preview)")
 
-    Важно:
-    - Для GPT-Image обычно возвращается b64_json (base64), а не URL.
-    - Чтобы гарантированно сохранять JPEG, используем output_format="jpeg".
+    while True:
+        choice = input("Enter 1 or 2 (default 1): ").strip() or "1"
+        if choice == "1":
+            logging.info("Selected image backend: OpenAI GPT Image")
+            return "openai"
+        if choice == "2":
+            logging.info("Selected image backend: Google NanoBanana Pro")
+            return "google"
+        print("Invalid input. Please enter 1 or 2.")
+
+
+def get_openai_image_generation_params() -> dict:
+    """
+    Параметры для генерации изображений через OpenAI Images API.
+    Всегда сохраняем JPEG.
     """
     return {
-        "model": OPENAI_IMAGE_MODEL,   # например: "gpt-image-1.5"
+        "model": OPENAI_IMAGE_MODEL,   # например: "gpt-image-1.5" или "gpt-image-1"
         "size": "1536x1024",
         "quality": "medium",
         "n": 1,
@@ -83,10 +108,7 @@ def ensure_images_directory() -> str:
 
 
 def ensure_cover_image_column(pg_conn, table_name: str) -> None:
-    """
-    Гарантирует наличие колонки cover_image_name.
-    Нужна, чтобы SELECT/UPDATE не падали, если колонки ещё нет.
-    """
+    """Гарантирует наличие колонки cover_image_name (чтобы SELECT/UPDATE не падали)."""
     check_query = sql.SQL("""
         SELECT 1
         FROM information_schema.columns
@@ -141,53 +163,181 @@ def generate_cover_prompt(title: str) -> Optional[str]:
         return None
 
 
-def generate_image_bytes(image_prompt: str) -> Tuple[Optional[bytes], Optional[str]]:
+def _init_google_genai_client():
+    """
+    Инициализирует Google GenAI SDK client для Gemini Developer API.
+    Требует:
+      pip install google-genai
+    """
+    if not GOOGLE_API_KEY or not str(GOOGLE_API_KEY).strip():
+        raise RuntimeError("GOOGLE_API_KEY is empty. Please set GOOGLE_API_KEY in config.py")
+
+    try:
+        from google import genai  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Google backend выбран, но пакет 'google-genai' не установлен. "
+            "Установите: pip install google-genai"
+        ) from e
+
+    return genai.Client(api_key=GOOGLE_API_KEY)
+
+
+def _pil_image_to_jpeg_bytes(pil_img, quality: int = 95) -> bytes:
+    """
+    Конвертирует PIL image в JPEG bytes (RGB).
+    Требует Pillow:
+      pip install pillow
+    """
+    try:
+        from PIL import Image  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "Для Google backend нужно конвертировать картинку в JPEG, "
+            "но Pillow не установлен. Установите: pip install pillow"
+        ) from e
+
+    # Gemini может вернуть RGBA/LA — для JPEG нужен RGB
+    if getattr(pil_img, "mode", None) != "RGB":
+        pil_img = pil_img.convert("RGB")
+
+    buf = BytesIO()
+    pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def generate_image_bytes_openai(image_prompt: str) -> Tuple[Optional[bytes], Optional[str]]:
     """
     Генерирует изображение через OpenAI Images API.
-
-    Возвращает:
-      (image_bytes, file_ext)
-
-    Для GPT-Image 1.5 обычно приходит response.data[0].b64_json.
+    Возвращает (bytes, "jpg").
     """
     logging.info(
-        "Generating image with prompt: %s",
+        "Generating image (OpenAI) with prompt: %s",
         (image_prompt[:100] + "...") if len(image_prompt) > 100 else image_prompt,
     )
 
     try:
-        params = get_image_generation_params()
+        params = get_openai_image_generation_params()
         response = OPENAI_CLIENT.images.generate(
             prompt=image_prompt,
             **params,
         )
 
         data0 = response.data[0]
-
-        # output_format="jpeg" => сохраняем .jpg
         ext = "jpg"
 
-        # Основной путь: b64_json
         b64 = getattr(data0, "b64_json", None)
         if b64:
             img_bytes = base64.b64decode(b64)
-            logging.info("  ✓ Image generated successfully (b64_json, %d bytes)", len(img_bytes))
+            logging.info("  ✓ OpenAI image generated (b64_json, %d bytes)", len(img_bytes))
             return img_bytes, ext
 
-        # Fallback: url (на случай иных моделей/режимов)
+        # Fallback: url (если вдруг вернется)
         url = getattr(data0, "url", None)
         if url:
-            logging.info("  ✓ Image generated successfully (url): %s", url)
+            logging.info("  ✓ OpenAI image generated (url): %s", url)
             r = requests.get(url, timeout=60)
             r.raise_for_status()
             return r.content, ext
 
-        logging.error("  ✗ Images API returned neither b64_json nor url. data[0]=%r", data0)
+        logging.error("  ✗ OpenAI Images API returned neither b64_json nor url. data[0]=%r", data0)
         return None, None
 
     except Exception as e:
-        logging.error("  ✗ Failed to generate image: %s", e)
+        logging.error("  ✗ Failed to generate image (OpenAI): %s", e)
         return None, None
+
+
+def generate_image_bytes_google(image_prompt: str, google_client) -> Tuple[Optional[bytes], Optional[str]]:
+    """
+    Генерирует изображение через Google NanoBanana Pro (Gemini 3 Pro Image Preview):
+      model="gemini-3-pro-image-preview"
+      image_size="2K"
+      aspect_ratio="3:2"
+
+    Возвращает (bytes, "jpg").
+    """
+    logging.info(
+        "Generating image (Google NanoBanana Pro) with prompt: %s",
+        (image_prompt[:100] + "...") if len(image_prompt) > 100 else image_prompt,
+    )
+
+    try:
+        from google.genai import types  # type: ignore
+
+        # Держим aspect ratio близко к OpenAI (1536x1024 ~= 3:2)
+        aspect_ratio = "16:9"
+        image_size = "2K"  # 2K как вы просили (K должна быть uppercase)
+
+        response = google_client.models.generate_content(
+            model="gemini-3-pro-image-preview",
+            contents=image_prompt,
+            config=types.GenerateContentConfig(
+                # Можно ['TEXT','IMAGE'], но нам нужно изображение:
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(
+                    aspect_ratio=aspect_ratio,
+                    image_size=image_size,
+                ),
+            ),
+        )
+
+        # В ответе могут быть parts с изображением (inline_data / as_image()).
+        for part in getattr(response, "parts", []) or []:
+            # Самый удобный путь по докам — part.as_image() (PIL image)
+            try:
+                img = part.as_image()
+            except Exception:
+                img = None
+
+            if img is not None:
+                jpeg_bytes = _pil_image_to_jpeg_bytes(img, quality=95)
+                logging.info("  ✓ Google image generated and converted to JPEG (%d bytes)", len(jpeg_bytes))
+                return jpeg_bytes, "jpg"
+
+            # На всякий случай: если SDK даст доступ к inline_data
+            inline = getattr(part, "inline_data", None)
+            if inline is not None:
+                data = getattr(inline, "data", None)
+                # data может быть bytes или base64-string; попробуем оба
+                if isinstance(data, (bytes, bytearray)) and data:
+                    # Не гарантируем формат => попробуем через PIL -> JPEG
+                    try:
+                        from PIL import Image
+                        pil_img = Image.open(BytesIO(data))
+                        jpeg_bytes = _pil_image_to_jpeg_bytes(pil_img, quality=95)
+                        logging.info("  ✓ Google inline_data converted to JPEG (%d bytes)", len(jpeg_bytes))
+                        return jpeg_bytes, "jpg"
+                    except Exception:
+                        # если уже JPEG-байты, можно вернуть как есть
+                        return bytes(data), "jpg"
+                if isinstance(data, str) and data.strip():
+                    raw = base64.b64decode(data)
+                    try:
+                        from PIL import Image
+                        pil_img = Image.open(BytesIO(raw))
+                        jpeg_bytes = _pil_image_to_jpeg_bytes(pil_img, quality=95)
+                        logging.info("  ✓ Google base64 inline_data converted to JPEG (%d bytes)", len(jpeg_bytes))
+                        return jpeg_bytes, "jpg"
+                    except Exception:
+                        return raw, "jpg"
+
+        logging.error("  ✗ Google response contained no image parts.")
+        return None, None
+
+    except Exception as e:
+        logging.error("  ✗ Failed to generate image (Google): %s", e)
+        return None, None
+
+
+def generate_image_bytes(image_backend: ImageBackend, image_prompt: str, google_client=None) -> Tuple[Optional[bytes], Optional[str]]:
+    """Маршрутизатор генерации изображения по выбранному backend."""
+    if image_backend == "openai":
+        return generate_image_bytes_openai(image_prompt)
+    if image_backend == "google":
+        return generate_image_bytes_google(image_prompt, google_client)
+    logging.error("Unknown image backend: %s", image_backend)
+    return None, None
 
 
 def save_image_bytes(image_bytes: bytes, file_path: str) -> bool:
@@ -234,12 +384,8 @@ def update_cover_image_name(pg_conn, table_name: str, article_id: int, cover_ima
 
 
 def get_articles_with_titles(pg_conn, table_name: str, article_ids: Optional[List[int]] = None) -> List[Any]:
-    """
-    Получает статьи с id, title, cover_image_name из таблицы.
-    """
+    """Получает статьи с id, title, cover_image_name из таблицы."""
     logging.info("Fetching articles from table %s", table_name)
-
-    # Чтобы SELECT не падал, если колонки ещё нет
     ensure_cover_image_column(pg_conn, table_name)
 
     if article_ids:
@@ -270,21 +416,14 @@ def get_articles_with_titles(pg_conn, table_name: str, article_ids: Optional[Lis
 
 
 def _extract_article_id_title_cover(row: Any) -> Tuple[int, str, Optional[str]]:
-    """
-    Приводит строку из fetchall к (id, title, cover_image_name),
-    поддерживает tuple/list и dict-подобные строки.
-    """
+    """Нормализует строку из fetchall к (id, title, cover_image_name)."""
     if isinstance(row, dict):
         return int(row["id"]), str(row["title"]), row.get("cover_image_name")
 
-    # psycopg3 Row может поддерживать доступ по ключу
     try:
         return int(row["id"]), str(row["title"]), row.get("cover_image_name")  # type: ignore
     except Exception:
-        # fallback для tuple/list
-        cover = None
-        if len(row) >= 3:
-            cover = row[2]
+        cover = row[2] if len(row) >= 3 else None
         return int(row[0]), str(row[1]), cover
 
 
@@ -297,34 +436,39 @@ def _has_cover(cover_image_name: Optional[str]) -> bool:
     return True
 
 
-def generate_cover_for_article(pg_conn, table_name: str, article_id: int, title: str, images_dir: str) -> bool:
+def generate_cover_for_article(
+    pg_conn,
+    table_name: str,
+    article_id: int,
+    title: str,
+    images_dir: str,
+    image_backend: ImageBackend,
+    google_client=None
+) -> bool:
     """Генерирует обложку для одной статьи."""
     logging.info("")
     logging.info("=" * 60)
     logging.info("Processing article ID %d: %s", article_id, title)
     logging.info("=" * 60)
 
-    # Шаг 1: Генерируем промпт для обложки
     cover_prompt = generate_cover_prompt(title)
     if not cover_prompt:
         logging.error("Failed to generate cover prompt, skipping article")
         return False
 
-    # Шаг 2: Генерируем изображение (байты JPEG)
-    image_bytes, ext = generate_image_bytes(cover_prompt)
+    image_bytes, ext = generate_image_bytes(image_backend, cover_prompt, google_client=google_client)
     if not image_bytes or not ext:
         logging.error("Failed to generate image bytes, skipping article")
         return False
 
-    # Шаг 3: Сохраняем изображение (всегда JPEG -> .jpg)
-    cover_image_name = f"cover_image_{article_id}.{ext}"
+    # Всегда сохраняем JPEG -> .jpg
+    cover_image_name = f"cover_image_{article_id}.jpg"
     file_path = os.path.join(images_dir, cover_image_name)
 
     if not save_image_bytes(image_bytes, file_path):
         logging.error("Failed to save image, skipping article")
         return False
 
-    # Шаг 4: Обновляем БД
     if not update_cover_image_name(pg_conn, table_name, article_id, cover_image_name):
         logging.error("Failed to update database, but image was saved")
         return False
@@ -334,10 +478,20 @@ def generate_cover_for_article(pg_conn, table_name: str, article_id: int, title:
 
 
 def main():
-    """Основная функция"""
     logging.info("=" * 60)
     logging.info("Cover Image Generator")
     logging.info("=" * 60)
+
+    # НОВОЕ: выбор модели генерации изображения
+    image_backend = choose_image_backend()
+
+    google_client = None
+    if image_backend == "google":
+        try:
+            google_client = _init_google_genai_client()
+        except Exception as e:
+            logging.error("Google backend init failed: %s", e)
+            return
 
     images_dir = ensure_images_directory()
 
@@ -409,12 +563,20 @@ def main():
             logging.info(">>> Processing article %d of %d <<<", idx, len(rows))
             logging.info("")
 
-            # НОВОЕ: если обложка уже есть — пропускаем
             if _has_cover(cover_image_name):
                 skipped_count += 1
                 logging.info("↷ Skipped article ID %d (cover_image_name already set: %s)", article_id, cover_image_name)
             else:
-                if generate_cover_for_article(pg_conn, selected_table, article_id, title, images_dir):
+                ok = generate_cover_for_article(
+                    pg_conn=pg_conn,
+                    table_name=selected_table,
+                    article_id=article_id,
+                    title=title,
+                    images_dir=images_dir,
+                    image_backend=image_backend,
+                    google_client=google_client
+                )
+                if ok:
                     success_count += 1
                     logging.info("✓ Article %d/%d completed successfully", idx, len(rows))
                 else:
