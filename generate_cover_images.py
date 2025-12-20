@@ -54,19 +54,20 @@ def get_image_generation_params():
     """
     Возвращает параметры для генерации изображений через GPT-Image 1.5.
     
-    Параметры:
+    Поддерживаемые параметры:
     - model: "gpt-image-1.5"
+    - prompt: текстовое описание (передается отдельно)
     - size: "1024x1024", "1792x1024", "1024x1792"
     - quality: "standard" (~$0.04) или "hd" (~$0.17)
     - n: количество изображений (обычно 1)
-    - response_format: "url" или "b64_json"
+    
+    Примечание: response_format не поддерживается GPT-Image 1.5 API
     """
     params = {
         "model": OPENAI_IMAGE_MODEL,
-        "size": "1792x1024",  # Размеры: "1024x1024", "1792x1024", "1024x1792"
+        "size": "1024x1024",  # Размеры: "1024x1024", "1792x1024", "1024x1792"
         "quality": "standard",  # "standard" (~$0.04) или "hd" (~$0.17)
         "n": 1,  # Количество изображений
-        "response_format": "url"  # "url" или "b64_json"
     }
     return params
 
@@ -115,7 +116,7 @@ def generate_cover_prompt(title: str) -> Optional[str]:
 
 def generate_image(image_prompt: str) -> Optional[str]:
     """
-    Генерирует изображение через DALL-E API.
+    Генерирует изображение через GPT-Image 1.5 API.
     
     Args:
         image_prompt: Промпт для генерации изображения
