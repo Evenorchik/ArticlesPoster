@@ -9,6 +9,7 @@
 """
 import os
 import logging
+import time
 import requests
 from typing import Optional, List
 from openai import OpenAI
@@ -99,7 +100,7 @@ def generate_cover_prompt(title: str) -> Optional[str]:
             messages=[
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=200,
+            max_completion_tokens=200,
             temperature=0.7
         )
         
@@ -389,19 +390,33 @@ def main():
         
         logging.info("")
         logging.info("Found %d article(s) to process", len(articles))
+        logging.info("Processing articles sequentially (one by one)...")
+        logging.info("")
         
-        # Обрабатываем каждую статью
+        # Обрабатываем каждую статью последовательно
         success_count = 0
         fail_count = 0
         
-        for article in articles:
+        for idx, article in enumerate(articles, 1):
             article_id = article['id'] if isinstance(article, dict) else article[0]
             title = article['title'] if isinstance(article, dict) else article[1]
             
+            logging.info("")
+            logging.info(">>> Processing article %d of %d <<<", idx, len(articles))
+            logging.info("")
+            
+            # Последовательная обработка: промпт -> изображение -> сохранение -> БД
             if generate_cover_for_article(pg_conn, selected_table, article_id, title, images_dir):
                 success_count += 1
+                logging.info("✓ Article %d/%d completed successfully", idx, len(articles))
             else:
                 fail_count += 1
+                logging.error("✗ Article %d/%d failed", idx, len(articles))
+            
+            # Небольшая пауза между статьями (кроме последней)
+            if idx < len(articles):
+                logging.info("Waiting 2 seconds before next article...")
+                time.sleep(2)
         
         # Итоги
         logging.info("")
