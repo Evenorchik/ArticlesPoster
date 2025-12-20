@@ -13,6 +13,10 @@ class Coords:
     PUBLISH_BUTTON_1: Tuple[int, int] = (1301, 118)  # Шаг 7: первая кнопка Publish
     HASHTAGS_INPUT: Tuple[int, int] = (1037, 440)     # Шаг 8: поле ввода хэштегов
     PUBLISH_BUTTON_2: Tuple[int, int] = (1051, 602)   # Шаг 10: финальная кнопка Publish
+    PUBLISH_BUTTON_2_ALT: Tuple[int, int] = (1060, 573)
+    BODY_TEXT: Tuple[int, int] = (621, 270)
+    PLUS_BUTTON: Tuple[int, int] = (559, 268)
+    IMAGE_BUTTON: Tuple[int, int] = (612, 267)
     
     # Quora coordinates
     QUORA_EMPTY_CLICK: Tuple[int, int] = (1815, 194)  # Empty click to guarantee focus
@@ -49,4 +53,5 @@ class Delays:
 # Глобальные экземпляры для удобства
 coords = Coords()
 delays = Delays()
+
 

@@ -91,7 +91,7 @@ def get_openai_image_generation_params() -> dict:
     return {
         "model": OPENAI_IMAGE_MODEL,
         "size": "1536x1024",
-        "quality": "medium",
+        "quality": "high",
         "n": 1,
         "output_format": "jpeg",  # ВСЕГДА JPEG
     }
@@ -632,3 +632,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
