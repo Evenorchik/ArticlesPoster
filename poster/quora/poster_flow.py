@@ -1,15 +1,15 @@
 """
-UI-поток публикации статьи на Medium через PyAutoGUI.
+UI-поток публикации статьи на Quora через PyAutoGUI.
 """
 import time
 import logging
 import pyperclip
-from typing import Dict, List
+from typing import Dict, List, Optional
 from poster.ui.interface import UiDriver
 from poster.ui.coords import Coords, Delays
 from poster.clipboard.richtext import copy_markdown_as_rich_text
 from poster.timing import wait_with_log
-from poster.settings import MEDIUM_NEW_STORY_URL
+from poster.quora.cover_attacher import attach_cover_image
 
 
 def publish_article(
@@ -17,16 +17,20 @@ def publish_article(
     article: Dict,
     coords: Coords,
     delays: Delays,
+    driver: Optional[object] = None,
+    images_root_dir: str = "./data/images",
     clipboard_copy_rich_text: callable = None
 ) -> bool:
     """
-    Опубликовать статью на Medium через UI.
+    Опубликовать статью на Quora через UI.
     
     Args:
         ui: UI драйвер для взаимодействия с экраном
-        article: Словарь со статьей (title, body, hashtags)
+        article: Словарь со статьей (title, body, hashtags, cover_image_name)
         coords: Координаты для кликов
         delays: Задержки между действиями
+        driver: Selenium WebDriver для загрузки обложки (опционально)
+        images_root_dir: Папка с изображениями обложек (по умолчанию "./data/images")
         clipboard_copy_rich_text: Функция для копирования Rich Text (опционально)
     
     Returns:
@@ -94,6 +98,7 @@ def publish_article(
         logging.error("  ✗ Failed to click: %s", e)
         return False
 
+
     logging.info("STEP 2: Clicking on title input field...")
     logging.info("  Coordinates: %s", coords.TITLE_INPUT)
     try:
@@ -154,6 +159,19 @@ def publish_article(
         return False
 
     wait_with_log(delays.AFTER_BODY_PASTE, "STEP 5", 10.0)
+
+    # Загружаем обложку, если она есть и driver доступен
+    cover_image_name = article.get('cover_image_name', '') if isinstance(article, dict) else ''
+    if cover_image_name and driver:
+        logging.info("STEP 5.1: Attaching cover image: %s", cover_image_name)
+        if attach_cover_image(driver, cover_image_name, images_root_dir, article_id):
+            logging.info("  ✓ Cover image attached successfully")
+        else:
+            logging.warning("  ⚠ Failed to attach cover image, but continuing...")
+    elif cover_image_name and not driver:
+        logging.warning("  ⚠ Cover image name provided (%s) but no driver available, skipping", cover_image_name)
+    elif not cover_image_name:
+        logging.info("STEP 1.3: No cover image to attach")
 
     logging.info("STEP 6: Clicking first Publish button...")
     logging.info("  Coordinates: %s", coords.PUBLISH_BUTTON_1)
