@@ -8,6 +8,7 @@ from typing import Optional
 from poster.models import Profile
 from poster.adspower.tabs import safe_switch_to
 from poster.ui.interface import UiDriver
+from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
 
 
 def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_after_publish: float = 5.0) -> Optional[str]:
@@ -22,10 +23,13 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
     Returns:
         URL статьи или None
     """
-    logging.info("STEP 11: Getting published Quora article URL via Selenium...")
+    if is_info_mode():
+        log_info_short("Получение URL опубликованной статьи")
+    else:
+        logging.info("STEP 11: Getting published Quora article URL via Selenium...")
     
     # Ждем, пока URL изменится на финальный
-    logging.info("  Waiting %.1f seconds for URL to update after publish...", wait_after_publish)
+    log_debug_detailed(f"  Waiting {wait_after_publish:.1f} seconds for URL to update after publish...")
     if ui:
         ui.sleep(wait_after_publish)
     else:
@@ -64,11 +68,14 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
                 # Проверяем, что URL не содержит /write или /compose
                 if url and 'quora.com' in url:
                     if '/write' not in url and '/compose' not in url:
-                        logging.info("  ✓ URL retrieved via Selenium (final URL)")
-                        logging.info("  Retrieved URL: %s", url)
+                        if is_info_mode():
+                            log_info_short(f"✓ URL получен: {url}")
+                        else:
+                            logging.info("  ✓ URL retrieved via Selenium (final URL)")
+                            logging.info("  Retrieved URL: %s", url)
                         break
                     else:
-                        logging.debug("  URL still contains /write or /compose, waiting... (current: %s)", url)
+                        log_debug_detailed(f"  URL still contains /write or /compose, waiting... (current: {url})")
                         if ui:
                             ui.sleep(check_interval)
                         else:
@@ -86,11 +93,13 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
             if waited >= max_wait_time:
                 url = profile.driver.current_url
                 if url and ('/write' in url or '/compose' in url):
-                    logging.warning("  ⚠ URL still contains /write or /compose after waiting, but using it anyway")
-                    logging.warning("  Retrieved URL: %s", url)
+                    log_debug_detailed(f"  ⚠ URL still contains /write or /compose after waiting, but using it anyway: {url}")
                 elif url:
-                    logging.info("  ✓ URL retrieved via Selenium")
-                    logging.info("  Retrieved URL: %s", url)
+                    if is_info_mode():
+                        log_info_short(f"✓ URL получен: {url}")
+                    else:
+                        logging.info("  ✓ URL retrieved via Selenium")
+                        logging.info("  Retrieved URL: %s", url)
                 else:
                     logging.error("  ✗ Failed to get URL from driver")
                     url = None
@@ -102,8 +111,11 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
                 ui.hotkey('ctrl', 'c')
                 ui.sleep(1)
                 url = pyperclip.paste()
-                logging.info("  ✓ URL copied from clipboard (fallback)")
-                logging.info("  Retrieved URL: %s", url)
+                if is_info_mode():
+                    log_info_short(f"✓ URL скопирован из буфера: {url}")
+                else:
+                    logging.info("  ✓ URL copied from clipboard (fallback)")
+                    logging.info("  Retrieved URL: %s", url)
             else:
                 logging.error("  Driver not available and no UI fallback")
                 return None
@@ -112,10 +124,11 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
         return None
 
     if url and url.startswith('http'):
-        logging.info("="*60)
-        logging.info("✓ Quora article published successfully!")
-        logging.info("URL: %s", url)
-        logging.info("="*60)
+        if not is_info_mode():
+            logging.info("="*60)
+            logging.info("✓ Quora article published successfully!")
+            logging.info("URL: %s", url)
+            logging.info("="*60)
         return url
     else:
         logging.warning("="*60)

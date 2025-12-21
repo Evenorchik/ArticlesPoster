@@ -41,15 +41,26 @@ from poster.medium import publish_article, fetch_published_url
 from poster.quora import publish_article as publish_article_quora, fetch_published_url as fetch_published_url_quora
 from poster.models import Profile
 from poster.link_replacer import update_article_body_with_replaced_link
-from config import LOG_LEVEL, LOG_MODE, TIME_CONFIG
+from config import LOG_LEVEL, TIME_CONFIG
 from psycopg import sql
 from telegram_bot import notify_poster_started, notify_article_posted, notify_posting_complete
+from poster.logging_helper import set_log_mode, log_step, log_info_short, log_debug_detailed, is_info_mode
+
+# ============================================================================
+# РЕЖИМ ЛОГИРОВАНИЯ
+# ============================================================================
+# DEBUG - подробное логирование всех шагов
+# INFO - короткое логирование (по одной строке на шаг)
+LOG_MODE = "DEBUG"  # Измените на "INFO" для короткого логирования
 
 # Настройка логирования
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+# Устанавливаем режим логирования для всех модулей
+set_log_mode(LOG_MODE)
 
 # Константы
 KIEV_TIMEZONE = pytz.timezone('Europe/Kiev')  # Киевское время (UTC+2/UTC+3)
@@ -127,7 +138,10 @@ def open_ads_power_profile(profile_id: str, platform: str = "medium") -> Optiona
         logging.error("Profile No %d has no sequential_no mapping", profile_no)
         return None
     
-    logging.info("Opening profile: ID=%s, No=%d, Seq=%d for %s", profile_id, profile_no, sequential_no, platform)
+    if is_info_mode():
+        log_info_short(f"Открытие профиля: Seq={sequential_no}, платформа={platform}")
+    else:
+        logging.info("Opening profile: ID=%s, No=%d, Seq=%d for %s", profile_id, profile_no, sequential_no, platform)
     
     # Подготавливаем профиль
     profile = _profile_manager.ensure_ready(profile_no)
@@ -137,19 +151,25 @@ def open_ads_power_profile(profile_id: str, platform: str = "medium") -> Optiona
     
     # Фокус/максимизация окна
     if not _window_manager.focus(profile):
-        logging.warning("Failed to focus/maximize window, but continuing...")
+        log_debug_detailed("Failed to focus/maximize window, but continuing...")
     
     # Открываем вкладку в зависимости от платформы
     if platform == "quora":
         if not _tab_manager.ensure_quora_tab_open(profile, _ui, _window_manager):
             logging.error("Failed to open Quora tab for profile %d", profile_no)
             return None
-        logging.info("✓ Profile ready: window focused, Quora tab active")
+        if is_info_mode():
+            log_info_short("✓ Профиль готов, вкладка Quora открыта")
+        else:
+            logging.info("✓ Profile ready: window focused, Quora tab active")
     else:
         if not _tab_manager.ensure_medium_tab_open(profile, _ui, _window_manager):
             logging.error("Failed to open Medium tab for profile %d", profile_no)
             return None
-        logging.info("✓ Profile ready: window focused, Medium tab active")
+        if is_info_mode():
+            log_info_short("✓ Профиль готов, вкладка Medium открыта")
+        else:
+            logging.info("✓ Profile ready: window focused, Medium tab active")
     
     return profile
 
@@ -166,9 +186,12 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     sequential_no = get_sequential_no(profile_no)
     profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
     
-    logging.info("="*60)
-    logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
-    logging.info("="*60)
+    if is_info_mode():
+        log_info_short(f"Публикация статьи ID {article_id} на Medium, профиль: {profile_info}")
+    else:
+        logging.info("="*60)
+        logging.info("Posting article ID %s using profile: %s", article_id, profile_info)
+        logging.info("="*60)
     
     # Получаем профиль из кэша
     if profile_no not in _profile_manager.profiles:
@@ -187,10 +210,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
             from poster.adspower.tabs import safe_switch_to
             safe_switch_to(profile.driver, profile.medium_window_handle)
             current_url = profile.driver.current_url
-            logging.info("Current URL on Medium tab: %s", current_url)
+            log_debug_detailed(f"Current URL on Medium tab: {current_url}")
             
             if 'medium.com' not in current_url:
-                logging.warning("Not on Medium page, navigating to Medium...")
+                log_debug_detailed("Not on Medium page, navigating to Medium...")
                 profile.driver.get(MEDIUM_NEW_STORY_URL)
                 time.sleep(2)
                 profile.medium_window_handle = profile.driver.current_window_handle
@@ -212,7 +235,10 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
     url = fetch_published_url(profile, _ui)
     
     if url:
-        logging.info("✓ Article published successfully! URL: %s", url)
+        if is_info_mode():
+            log_info_short(f"✓ Статья опубликована на Medium, URL: {url}")
+        else:
+            logging.info("✓ Article published successfully! URL: %s", url)
         return url
     else:
         logging.error("Failed to get URL for article ID %s", article_id)
@@ -231,9 +257,12 @@ def post_article_to_quora(article: dict, profile_id: str) -> Optional[str]:
     sequential_no = get_sequential_no(profile_no)
     profile_info = f"{profile_id} (No: {profile_no}" + (f", Seq: {sequential_no})" if sequential_no else ")")
     
-    logging.info("="*60)
-    logging.info("Posting article ID %s to Quora using profile: %s", article_id, profile_info)
-    logging.info("="*60)
+    if is_info_mode():
+        log_info_short(f"Публикация статьи ID {article_id} на Quora, профиль: {profile_info}")
+    else:
+        logging.info("="*60)
+        logging.info("Posting article ID %s to Quora using profile: %s", article_id, profile_info)
+        logging.info("="*60)
     
     # Получаем профиль из кэша
     if profile_no not in _profile_manager.profiles:
@@ -253,10 +282,10 @@ def post_article_to_quora(article: dict, profile_id: str) -> Optional[str]:
             from poster.settings import QUORA_URL
             safe_switch_to(profile.driver, profile.quora_window_handle)
             current_url = profile.driver.current_url
-            logging.info("Current URL on Quora tab: %s", current_url)
+            log_debug_detailed(f"Current URL on Quora tab: {current_url}")
             
             if 'quora.com' not in current_url:
-                logging.warning("Not on Quora page, navigating to Quora...")
+                log_debug_detailed("Not on Quora page, navigating to Quora...")
                 profile.driver.get(QUORA_URL)
                 time.sleep(2)
                 profile.quora_window_handle = profile.driver.current_window_handle
@@ -279,7 +308,10 @@ def post_article_to_quora(article: dict, profile_id: str) -> Optional[str]:
     url = fetch_published_url_quora(profile, _ui)
     
     if url:
-        logging.info("✓ Article published successfully on Quora! URL: %s", url)
+        if is_info_mode():
+            log_info_short(f"✓ Статья опубликована на Quora, URL: {url}")
+        else:
+            logging.info("✓ Article published successfully on Quora! URL: %s", url)
         return url
     else:
         logging.error("Failed to get URL for article ID %s on Quora", article_id)
@@ -850,8 +882,11 @@ def main():
             
             # Если статья с is_link='yes', заменяем ссылку перед постингом
             if is_link == 'yes':
-                logging.info("")
-                logging.info("Article has is_link='yes', replacing Bonza link with referral...")
+                if is_info_mode():
+                    log_info_short("Замена ссылки на реферальную...")
+                else:
+                    logging.info("")
+                    logging.info("Article has is_link='yes', replacing Bonza link with referral...")
                 success = update_article_body_with_replaced_link(
                     pg_conn,
                     selected_table,
@@ -859,7 +894,10 @@ def main():
                     seq_no
                 )
                 if success:
-                    logging.info("✓ Link replaced successfully")
+                    if is_info_mode():
+                        log_info_short("✓ Ссылка заменена")
+                    else:
+                        logging.info("✓ Link replaced successfully")
                     # Обновляем статью в памяти, чтобы использовать обновленную версию
                     # Получаем обновленную статью из БД
                     try:
@@ -867,18 +905,21 @@ def main():
                         updated_articles = get_articles_to_post(pg_conn, selected_table, [article_id])
                         if updated_articles:
                             article = updated_articles[0]
-                            logging.info("Article data refreshed from database")
+                            log_debug_detailed("Article data refreshed from database")
                     except Exception as e:
-                        logging.warning("Failed to refresh article from database: %s", e)
+                        log_debug_detailed(f"Failed to refresh article from database: {e}")
                 else:
-                    logging.warning("Failed to replace link, continuing with original article")
+                    log_debug_detailed("Failed to replace link, continuing with original article")
             
             # Открываем профиль
-            logging.info("")
-            logging.info("="*60)
-            logging.info("Posting article ID %s (Topic: %s) with profile Seq:%d", 
-                        article_id, article_topic[:50], seq_no)
-            logging.info("="*60)
+            if is_info_mode():
+                log_info_short(f"Публикация статьи ID {article_id} (Topic: {article_topic[:50]}), профиль Seq:{seq_no}, платформа: {platform.upper()}")
+            else:
+                logging.info("")
+                logging.info("="*60)
+                logging.info("Posting article ID %s (Topic: %s) with profile Seq:%d", 
+                            article_id, article_topic[:50], seq_no)
+                logging.info("="*60)
             
             result = open_ads_power_profile(profile_id, platform)
             if not result:
