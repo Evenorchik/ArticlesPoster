@@ -11,6 +11,7 @@ from poster.clipboard.richtext import copy_markdown_as_rich_text
 from poster.timing import wait_with_log
 from poster.settings import MEDIUM_NEW_STORY_URL
 from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
+from poster.medium.cover_attacher import attach_cover_image
 
 
 def publish_article(
@@ -18,6 +19,8 @@ def publish_article(
     article: Dict,
     coords: Coords,
     delays: Delays,
+    driver=None,  # Selenium WebDriver для прикрепления обложки
+    images_root_dir: str = "./data/images",  # Папка с изображениями
     clipboard_copy_rich_text: callable = None
 ) -> bool:
     """
@@ -25,9 +28,11 @@ def publish_article(
     
     Args:
         ui: UI драйвер для взаимодействия с экраном
-        article: Словарь со статьей (title, body, hashtags)
+        article: Словарь со статьей (title, body, hashtags, cover_image_name)
         coords: Координаты для кликов
         delays: Задержки между действиями
+        driver: Selenium WebDriver для прикрепления обложки (опционально)
+        images_root_dir: Корневая папка с изображениями
         clipboard_copy_rich_text: Функция для копирования Rich Text (опционально)
     
     Returns:
@@ -41,6 +46,7 @@ def publish_article(
     if isinstance(article, dict):
         title = article.get('title', '').strip()
         body = article.get('body', '').strip()
+        cover_image_name = article.get('cover_image_name', '').strip()
         hashtags = [
             article.get('hashtag1', '').strip(),
             article.get('hashtag2', '').strip(),
@@ -51,6 +57,7 @@ def publish_article(
     else:
         title = article[2] if len(article) > 2 else ''
         body = article[3] if len(article) > 3 else ''
+        cover_image_name = article[9] if len(article) > 9 else ''  # Предполагаем, что cover_image_name в индексе 9
         hashtags = [
             article[4] if len(article) > 4 else '',
             article[5] if len(article) > 5 else '',
@@ -62,10 +69,11 @@ def publish_article(
     hashtags = [h for h in hashtags if h]
 
     if is_info_mode():
-        log_info_short(f"Статья: {title[:50]}{'...' if len(title) > 50 else ''}")
+        log_info_short(f"Статья: {title[:50]}{'...' if len(title) > 50 else ''}, обложка: {cover_image_name if cover_image_name else 'нет'}")
     else:
         logging.info("Article title: %s", title[:50] + "..." if len(title) > 50 else title)
         logging.info("Article body length: %d characters", len(body))
+        logging.info("Cover image: %s", cover_image_name if cover_image_name else "None")
         logging.info("Hashtags: %s", hashtags)
         logging.info("")
 
@@ -89,6 +97,14 @@ def publish_article(
         logging.info("STEP 2: Clicking on title input field...")
         logging.info("  Coordinates: %s", coords.TITLE_INPUT)
     try:
+        ui.sleep(2)
+        ui.click(*coords.BODY_TEXT)
+        ui.sleep(2)
+        ui.click(*coords.PLUS_BUTTON)
+        ui.sleep(2)
+        ui.click(*coords.IMAGE_BUTTON)
+        ui.sleep(2)
+        ui.press('esc')
         ui.sleep(1)
         ui.screenshot_on_click(coords.TITLE_INPUT, label="STEP 2: title click")
         ui.sleep(2)
@@ -155,6 +171,35 @@ def publish_article(
         return False
 
     wait_with_log(delays.AFTER_BODY_PASTE, "STEP 5", 10.0)
+
+    # STEP 5.5: Attach cover image (если есть)
+    if cover_image_name and driver:
+        if is_info_mode():
+            log_info_short(f"Прикрепление обложки: {cover_image_name}")
+        else:
+            logging.info("STEP 5.5: Attaching cover image...")
+            logging.info("  Cover image name: %s", cover_image_name)
+        try:
+            success = attach_cover_image(
+                driver=driver,
+                cover_image_name=cover_image_name,
+                images_root_dir=images_root_dir,
+                article_id=article_id
+            )
+            if not success:
+                log_debug_detailed("  ⚠ Failed to attach cover image, continuing without it")
+            else:
+                if is_info_mode():
+                    log_info_short("✓ Обложка прикреплена")
+                else:
+                    logging.info("  ✓ Cover image attached successfully")
+        except Exception as e:
+            logging.error("  ✗ Error attaching cover image: %s", e, exc_info=True)
+            log_debug_detailed("  Continuing without cover image...")
+    elif cover_image_name and not driver:
+        log_debug_detailed(f"STEP 5.5: Cover image specified ({cover_image_name}) but no driver available, skipping...")
+    else:
+        log_debug_detailed("STEP 5.5: No cover image specified, skipping...")
 
     if is_info_mode():
         log_info_short("Клик 3: Первая кнопка Publish")

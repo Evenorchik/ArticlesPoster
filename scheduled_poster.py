@@ -225,7 +225,7 @@ def post_article_to_medium(article: dict, profile_id: str) -> Optional[str]:
                 profile.medium_window_handle = profile.driver.current_window_handle
     
     # Публикуем статью через PyAutoGUI
-    success = publish_article(_ui, article, _coords, _delays)
+    success = publish_article(_ui, article, _coords, _delays, profile.driver, IMAGES_ROOT_DIR)
     if not success:
         logging.error("Failed to publish article ID %s", article_id)
         return None
