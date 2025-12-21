@@ -22,9 +22,9 @@ COMPARISONS:
 - If the original text compares options/ideas, preserve the key comparison points and conclusions.
 
 LINK HANDLING (IMPORTANT):
-- If the source article contains one or more links, keep them in the rewrite.
-- Reinsert each link in Markdown format: [descriptive anchor text](URL).
-- Place each link where it naturally supports the surrounding sentence/idea (do not dump links randomly).
+- If the source article contains a link - keep it in the rewrite. BUT NOT MORE THAN 1 LINK.
+- Reinsert link in Markdown format: [descriptive anchor text](URL).
+- Place link where it naturally supports the surrounding sentence/idea (do not dump links randomly), link should looks intentional, not just dropped into the text, but, for example, if users mentioning this service.
 - The anchor text should be meaningful and fit the context (not “click here”).
 - Do not invent new links. Only use links that already exist in the source text.
 
