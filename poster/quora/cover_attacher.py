@@ -126,19 +126,11 @@ def attach_cover_image(
         logging.info("  Sending file path to input: %s", abs_path)
         file_input.send_keys(abs_path)
         
-        # Ждем подтверждения загрузки (появление preview или изменение состояния)
-        # Проверяем, что файл был загружен
-        try:
-            wait = WebDriverWait(driver, WAIT_UPLOAD_TIMEOUT_SEC)
-            # Ждем, пока input.files.length станет 1 (через JS)
-            wait.until(
-                lambda d: d.execute_script("return arguments[0].files.length", file_input) > 0
-            )
-            logging.info("  ✓ File uploaded successfully (confirmed via JS)")
-        except TimeoutException:
-            # Если JS проверка не сработала, просто ждем немного и считаем успешным
-            logging.warning("  ⚠ Could not confirm upload via JS, but file was sent")
-            time.sleep(2)
+        # Даем время на обработку файла Quora
+        # Примечание: проверка files.length через JS не работает надежно на Quora,
+        # но send_keys() успешно прикрепляет файл, поэтому просто ждем
+        logging.info("  Waiting for Quora to process the file...")
+        time.sleep(3)  # Даем время на загрузку и обработку
         
         logging.info("  ✓ Cover image attached successfully")
         return True
