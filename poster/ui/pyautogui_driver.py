@@ -1,10 +1,11 @@
 """
 Реализация UiDriver через PyAutoGUI.
 """
+import os
 import time
 import pyautogui
 import pyperclip
-from typing import Tuple
+from typing import Tuple, Optional
 from click_debug_screenshots import capture_click_screenshot
 from poster.ui.interface import UiDriver
 
@@ -48,4 +49,78 @@ class PyAutoGuiDriver:
     def paste(self) -> str:
         """Вставить текст из буфера обмена."""
         return pyperclip.paste()
+
+    # -----------------------------
+    # Image-based clicking helpers
+    # -----------------------------
+    def locate_center_on_screen(
+        self,
+        image_path: str,
+        confidence: float = 0.95,
+        timeout_s: float = 12.0,
+        grayscale: bool = True,
+    ) -> Optional[Tuple[int, int]]:
+        """
+        Найти центр совпадения картинки на экране.
+
+        Примечания:
+        - confidence работает только при наличии OpenCV (opencv-python).
+        - если OpenCV не установлен, будет попытка без confidence (точное совпадение).
+        """
+        if not image_path:
+            return None
+
+        abs_path = os.path.abspath(image_path)
+        if not os.path.exists(abs_path):
+            return None
+
+        deadline = time.time() + max(0.5, float(timeout_s))
+        while time.time() < deadline:
+            try:
+                pt = pyautogui.locateCenterOnScreen(
+                    abs_path,
+                    confidence=confidence,
+                    grayscale=grayscale,
+                )
+            except TypeError:
+                # confidence unsupported (likely no opencv) → try exact match
+                try:
+                    pt = pyautogui.locateCenterOnScreen(abs_path, grayscale=grayscale)
+                except Exception:
+                    pt = None
+            except Exception:
+                pt = None
+
+            if pt:
+                # pt can be Point(x,y) or tuple-like
+                try:
+                    return (int(pt.x), int(pt.y))
+                except Exception:
+                    try:
+                        return (int(pt[0]), int(pt[1]))
+                    except Exception:
+                        return None
+
+            time.sleep(0.25)
+
+        return None
+
+    def click_image(
+        self,
+        image_path: str,
+        confidence: float = 0.95,
+        timeout_s: float = 12.0,
+        grayscale: bool = True,
+    ) -> bool:
+        """Найти картинку на экране и кликнуть в центр. Возвращает True/False."""
+        pt = self.locate_center_on_screen(
+            image_path=image_path,
+            confidence=confidence,
+            timeout_s=timeout_s,
+            grayscale=grayscale,
+        )
+        if not pt:
+            return False
+        self.click(pt[0], pt[1])
+        return True
 

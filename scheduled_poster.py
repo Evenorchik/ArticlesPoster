@@ -390,41 +390,38 @@ def get_articles_by_is_link(pg_conn, table_name: str, is_link: str, limit: int) 
         has_cover_image = cur.fetchone() is not None
     
     # Формируем запрос в зависимости от наличия hashtag5 и cover_image_name
+    # quora_text считается обязательной колонкой (для Quora постинга)
     base_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4"
     if has_hashtag5:
         base_cols += ", hashtag5"
     base_cols += ", url, profile_id, is_link"
     if has_cover_image:
         base_cols += ", cover_image_name"
+    base_cols += ", quora_text"
     select_cols = base_cols
     
     # Формируем WHERE условие
+    where_parts = [sql.SQL("(url IS NULL OR url = '')")]
+    params = []
+    
     if has_is_link:
-        query = sql.SQL("""
-            SELECT {cols}
-            FROM {table}
-            WHERE (url IS NULL OR url = '')
-            AND is_link = %s
-            ORDER BY RANDOM()
-            LIMIT %s
-        """).format(
-            cols=sql.SQL(select_cols),
-            table=sql.Identifier(table_name)
-        )
-        params = (is_link, limit)
-    else:
-        # Если колонки is_link нет, для 'no' берем все неопубликованные
-        query = sql.SQL("""
-            SELECT {cols}
-            FROM {table}
-            WHERE (url IS NULL OR url = '')
-            ORDER BY RANDOM()
-            LIMIT %s
-        """).format(
-            cols=sql.SQL(select_cols),
-            table=sql.Identifier(table_name)
-        )
-        params = (limit,)
+        where_parts.append(sql.SQL("is_link = %s"))
+        params.append(is_link)
+    
+    where_clause = sql.SQL(" AND ").join(where_parts)
+    
+    query = sql.SQL("""
+        SELECT {cols}
+        FROM {table}
+        WHERE {where_clause}
+        ORDER BY RANDOM()
+        LIMIT %s
+    """).format(
+        cols=sql.SQL(select_cols),
+        table=sql.Identifier(table_name),
+        where_clause=where_clause
+    )
+    params.append(limit)
     
     try:
         with pg_conn.cursor() as cur:
@@ -729,6 +726,7 @@ def main():
             medium_articles_with_link = get_articles_by_is_link(pg_conn, selected_table, 'yes', ARTICLES_WITH_LINK_COUNT)
         
         # Получаем статьи для Quora (если выбрано)
+        # Для Quora требуем наличие непустого quora_text
         quora_articles_no_link = []
         quora_articles_with_link = []
         if post_quora:

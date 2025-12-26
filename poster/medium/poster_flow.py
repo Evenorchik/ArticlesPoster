@@ -1,6 +1,7 @@
 """
 UI-поток публикации статьи на Medium через PyAutoGUI.
 """
+import os
 import time
 import logging
 import pyperclip
@@ -12,6 +13,10 @@ from poster.timing import wait_with_log
 from poster.settings import MEDIUM_NEW_STORY_URL
 from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
 from poster.medium.cover_attacher import attach_cover_image
+
+PIC_MATCH_CONFIDENCE = 0.95
+PIC_HASHTAGS = "./pics_to_click/medium_hashtags.jpg"
+PIC_PUBLISH_SECOND = "./pics_to_click/medium_publish_second.jpg"
 
 
 def publish_article(
@@ -40,6 +45,28 @@ def publish_article(
     """
     if clipboard_copy_rich_text is None:
         clipboard_copy_rich_text = copy_markdown_as_rich_text
+    
+    # Проверка наличия картинок для image-based кликов
+    missing_images = []
+    if not os.path.exists(PIC_HASHTAGS):
+        missing_images.append(f"  ✗ {PIC_HASHTAGS}")
+    if not os.path.exists(PIC_PUBLISH_SECOND):
+        missing_images.append(f"  ✗ {PIC_PUBLISH_SECOND}")
+    
+    if missing_images:
+        logging.error("=" * 60)
+        logging.error("ERROR: Required image files for Medium poster are missing!")
+        logging.error("The following image files are required but not found:")
+        for img in missing_images:
+            logging.error(img)
+        logging.error("")
+        logging.error("Falling back to coordinate-based clicks.")
+        logging.error("To enable image-based clicks, please ensure the images exist at:")
+        logging.error("  - %s", os.path.abspath(PIC_HASHTAGS))
+        logging.error("  - %s", os.path.abspath(PIC_PUBLISH_SECOND))
+        logging.error("=" * 60)
+    else:
+        log_debug_detailed("✓ All required image files found. Image-based clicks enabled.")
     
     article_id = article.get('id') if isinstance(article, dict) else article[0]
     
@@ -228,11 +255,20 @@ def publish_article(
         logging.info("  Coordinates: %s", coords.HASHTAGS_INPUT)
     try:
         ui.sleep(1)
-        ui.screenshot_on_click(coords.HASHTAGS_INPUT, label="STEP 7: hash click")
-        ui.sleep(2)
-        ui.click(*coords.HASHTAGS_INPUT)
-        ui.sleep(1)
-        ui.click(*coords.HASHTAGS_INPUT)
+        # Prefer image-based click (more robust than coordinates). Fallback to coords if not found.
+        clicked = False
+        if hasattr(ui, "click_image"):
+            try:
+                clicked = ui.click_image(PIC_HASHTAGS, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
+            except Exception:
+                clicked = False
+
+        if not clicked:
+            ui.screenshot_on_click(coords.HASHTAGS_INPUT, label="STEP 7: hash click (fallback coords)")
+            ui.sleep(2)
+            ui.click(*coords.HASHTAGS_INPUT)
+            ui.sleep(1)
+            ui.click(*coords.HASHTAGS_INPUT)
         log_debug_detailed("  ✓ Clicked successfully")
     except Exception as e:
         logging.error("  ✗ Failed to click: %s", e)
@@ -276,14 +312,34 @@ def publish_article(
         logging.info("  Waiting 3 seconds before clicking final Publish...")
     ui.sleep(3)
     try:
-        ui.screenshot_on_click(coords.PUBLISH_BUTTON_2, label="STEP 9: publish 2 click")
-        ui.sleep(2)
-        ui.click(*coords.PUBLISH_BUTTON_2)
-        ui.sleep(1)
-        log_debug_detailed("  ✓ First click successful")
-        ui.sleep(1)
-        ui.click(*coords.PUBLISH_BUTTON_2)
-        log_debug_detailed("  ✓ Second click successful")
+        # Prefer image-based click for the second publish button. Fallback to coords.
+        clicked = False
+        center = None
+        if hasattr(ui, "locate_center_on_screen"):
+            try:
+                center = ui.locate_center_on_screen(PIC_PUBLISH_SECOND, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
+            except Exception:
+                center = None
+
+        if center:
+            ui.click(*center)
+            ui.sleep(1)
+            log_debug_detailed("  ✓ First click successful (image)")
+            ui.sleep(1)
+            # Second click (as before), using the same center
+            ui.click(*center)
+            log_debug_detailed("  ✓ Second click successful (image)")
+            clicked = True
+
+        if not clicked:
+            ui.screenshot_on_click(coords.PUBLISH_BUTTON_2, label="STEP 9: publish 2 click (fallback coords)")
+            ui.sleep(2)
+            ui.click(*coords.PUBLISH_BUTTON_2)
+            ui.sleep(1)
+            log_debug_detailed("  ✓ First click successful")
+            ui.sleep(1)
+            ui.click(*coords.PUBLISH_BUTTON_2)
+            log_debug_detailed("  ✓ Second click successful")
     except Exception as e:
         logging.error("  ✗ Failed to click: %s", e)
         return False

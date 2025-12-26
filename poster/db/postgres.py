@@ -152,13 +152,15 @@ def get_articles_to_post(pg_conn, table_name: str, article_ids: Optional[List[in
         logging.debug("Could not check for cover_image_name column (assuming it doesn't exist): %s", e)
         has_cover_image = False
 
-    # Формируем список колонок в зависимости от наличия hashtag5 и cover_image_name
+    # quora_text всегда должен быть в таблице (обязательная колонка для Quora постинга)
+    # Добавляем его в SELECT без проверки - если колонки нет, запрос упадет с ошибкой
     base_cols = "id, topic, title, body, hashtag1, hashtag2, hashtag3, hashtag4"
     if has_hashtag5:
         base_cols += ", hashtag5"
     base_cols += ", url, profile_id"
     if has_cover_image:
         base_cols += ", cover_image_name"
+    base_cols += ", quora_text"  # Обязательная колонка для Quora
     select_cols = base_cols
 
     if article_ids:

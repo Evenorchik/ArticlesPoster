@@ -2,11 +2,12 @@
 Юнит-тестер для PyAutoGUI процесса постинга статей на Quora.
 
 Тестер автоматически:
-1. Берет первый профиль из секвенции (sequential_no = 1)
+1. Берет второй профиль из секвенции (sequential_no = 2)
 2. Открывает профиль через AdsPower API
 3. Максимизирует окно профиля
 4. Открывает Quora вкладку
 5. Выполняет цикл постинга статей для одного профиля
+6. Использует quora_text из базы данных (обязательное требование)
 """
 import time
 import logging
@@ -37,7 +38,7 @@ logging.basicConfig(
 
 # Константы
 IMAGES_ROOT_DIR = "./data/images"  # Папка с изображениями для обложек
-FIRST_SEQUENTIAL_NO = 1  # Используем первый профиль из секвенции
+SEQUENTIAL_NO = 2  # Используем второй профиль из секвенции
 
 
 def test_quora_pyautogui_posting():
@@ -49,18 +50,19 @@ def test_quora_pyautogui_posting():
     logging.info("="*60)
     logging.info("")
     logging.info("This tester will:")
-    logging.info("  - Automatically use first profile from sequence (sequential_no = 1)")
+    logging.info("  - Automatically use second profile from sequence (sequential_no = 2)")
     logging.info("  - Open profile via AdsPower API")
     logging.info("  - Maximize profile window")
     logging.info("  - Open Quora tab")
     logging.info("  - Ask you to select a table and articles from database")
     logging.info("  - Execute full PyAutoGUI posting process for Quora")
+    logging.info("  - Use quora_text from database (required, no fallback to body)")
     logging.info("  - Attach cover image if available (via Selenium driver)")
     logging.info("  - Fetch URL and update database")
     logging.info("")
     
-    # Получаем первый профиль из секвенции
-    sequential_no = FIRST_SEQUENTIAL_NO
+    # Получаем второй профиль из секвенции
+    sequential_no = SEQUENTIAL_NO
     profile_id = get_profile_id_by_sequential_no(sequential_no)
     profile_no = get_profile_no_by_sequential_no(sequential_no)
     
@@ -154,7 +156,14 @@ def test_quora_pyautogui_posting():
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             topic = article.get('topic', 'N/A')[:50] if isinstance(article, dict) else 'N/A'
             cover_image = article.get('cover_image_name', 'N/A') if isinstance(article, dict) else 'N/A'
-            logging.info("  %d. ID: %s | Topic: %s | Cover: %s", i, article_id, topic, cover_image)
+            quora_text = article.get('quora_text', '') if isinstance(article, dict) else ''
+            if not quora_text and not isinstance(article, dict):
+                # Пробуем извлечь из кортежа (последний элемент)
+                if len(article) > 0:
+                    quora_text = str(article[-1]) if article[-1] else ''
+            quora_status = f"{len(quora_text.strip())} chars" if quora_text and quora_text.strip() else "⚠ EMPTY"
+            logging.info("  %d. ID: %s | Topic: %s | Cover: %s | Quora text: %s", 
+                        i, article_id, topic, cover_image, quora_status)
         
         article_choice = input("\nEnter article number to post (or 'all' for all articles): ").strip().lower()
         
@@ -211,6 +220,11 @@ def test_quora_pyautogui_posting():
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             article_topic = article.get('topic', 'N/A')
             cover_image_name = article.get('cover_image_name', '') if isinstance(article, dict) else ''
+            quora_text = article.get('quora_text', '') if isinstance(article, dict) else ''
+            if not quora_text and not isinstance(article, dict):
+                # Пробуем извлечь из кортежа (последний элемент)
+                if len(article) > 0:
+                    quora_text = str(article[-1]) if article[-1] else ''
             
             logging.info("")
             logging.info("="*60)
@@ -220,6 +234,10 @@ def test_quora_pyautogui_posting():
                 logging.info("Cover image: %s", cover_image_name)
             else:
                 logging.info("Cover image: None")
+            if quora_text:
+                logging.info("Quora text: %d characters", len(quora_text.strip()))
+            else:
+                logging.warning("⚠ Quora text: EMPTY (article will be skipped with error)")
             logging.info("="*60)
             
             # Небольшая пауза перед началом

@@ -43,18 +43,56 @@ def publish_article(
     
     if isinstance(article, dict):
         title = article.get('title', '').strip()
-        body = article.get('body', '').strip()
+        quora_text = article.get('quora_text', '').strip()
         cover_image_name = article.get('cover_image_name', '').strip()
     else:
+        # Если article - кортеж или именованный кортеж, извлекаем значения
         title = article[2] if len(article) > 2 else ''
-        body = article[3] if len(article) > 3 else ''
-        cover_image_name = article[9] if len(article) > 9 else ''  # Предполагаем, что cover_image_name в индексе 9
+        
+        # Пробуем получить quora_text по атрибуту (для именованных кортежей)
+        quora_text = ''
+        cover_image_name = ''
+        
+        try:
+            if hasattr(article, 'quora_text'):
+                quora_text = str(article.quora_text).strip() if article.quora_text else ''
+            if hasattr(article, 'cover_image_name'):
+                cover_image_name = str(article.cover_image_name).strip() if article.cover_image_name else ''
+        except AttributeError:
+            pass
+        
+        # Если не получилось по атрибуту, пробуем по индексу
+        # quora_text всегда последний в SELECT (если есть)
+        if not quora_text and len(article) > 0:
+            last_idx = len(article) - 1
+            last_val = article[last_idx]
+            if last_val:
+                quora_text = str(last_val).strip()
+        
+        # cover_image_name предпоследний (если quora_text есть и есть cover_image_name)
+        if not cover_image_name and len(article) > 1:
+            # Если quora_text найден, cover_image_name может быть предпоследним
+            if quora_text and len(article) > 1:
+                prev_idx = len(article) - 2
+                prev_val = article[prev_idx]
+                if prev_val:
+                    cover_image_name = str(prev_val).strip()
+    
+    # Проверяем наличие quora_text - обязательное требование для постинга на Quora
+    if not quora_text:
+        logging.error("=" * 60)
+        logging.error("ERROR: Article ID %s has empty quora_text column!", article_id)
+        logging.error("Quora text is required for posting to Quora.")
+        logging.error("Please run quora_text_edit.py to generate quora_text for this article.")
+        logging.error("Skipping this article and moving to the next one.")
+        logging.error("=" * 60)
+        return False
 
     if is_info_mode():
         log_info_short(f"Статья: {title[:50]}{'...' if len(title) > 50 else ''}, обложка: {cover_image_name if cover_image_name else 'нет'}")
     else:
         logging.info("Article title: %s", title[:50] + "..." if len(title) > 50 else title)
-        logging.info("Article body length: %d characters", len(body))
+        logging.info("Quora text length: %d characters", len(quora_text))
         logging.info("Cover image: %s", cover_image_name if cover_image_name else "None")
         logging.info("")
 
@@ -150,24 +188,24 @@ def publish_article(
         logging.error("  ✗ Failed to press Enter: %s", e)
         return False
 
-    # STEP 7: Enter article body
+    # STEP 7: Enter article body (using quora_text)
     if is_info_mode():
-        log_info_short("Вставка тела статьи")
+        log_info_short("Вставка тела статьи (Quora текст)")
     else:
-        logging.info("STEP 7: Entering article body...")
-        logging.info("  Body length: %d characters", len(body))
+        logging.info("STEP 7: Entering article body (quora_text)...")
+        logging.info("  Quora text length: %d characters", len(quora_text))
     try:
         log_debug_detailed("  Converting Markdown to HTML and placing to clipboard as CF_HTML...")
-        if not clipboard_copy_rich_text(body):
+        if not clipboard_copy_rich_text(quora_text):
             log_debug_detailed("  Failed to copy as Rich Text, falling back to plain text")
-            pyperclip.copy(body)
+            pyperclip.copy(quora_text)
 
         ui.sleep(0.5)
         ui.hotkey('ctrl', 'v')
         ui.sleep(1)
-        log_debug_detailed("  ✓ Body pasted successfully")
+        log_debug_detailed("  ✓ Quora text pasted successfully")
     except Exception as e:
-        logging.error("  ✗ Failed to paste body: %s", e, exc_info=True)
+        logging.error("  ✗ Failed to paste quora_text: %s", e, exc_info=True)
         return False
 
     # STEP 8: Click on image upload button
