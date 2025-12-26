@@ -1,12 +1,14 @@
 """
 Юнит-тестер для PyAutoGUI процесса постинга статей на Medium.
 
-ВАЖНО: Перед запуском этого тестера убедитесь, что:
-1. Профиль AdsPower уже открыт
-2. Вкладка Medium New Story уже открыта и активна
-3. Окно профиля максимизировано
-
-Тестер не открывает профиль, а сразу начинает процесс постинга через PyAutoGUI.
+Тестер автоматически:
+1. Берет первый профиль из секвенции (sequential_no = 1)
+2. Открывает профиль через AdsPower API
+3. Максимизирует окно профиля
+4. Открывает Medium вкладку
+5. Выполняет цикл постинга статей для одного профиля
+6. Использует image-based клики по картинкам (для хэштегов и финальной кнопки Publish)
+7. Прикрепляет обложку через Selenium driver (если доступна)
 """
 import time
 import logging
@@ -19,9 +21,15 @@ from poster.db import (
     get_articles_to_post,
     update_article_url_and_profile,
 )
-from poster.ui import PyAutoGuiDriver, Coords, Delays
-from poster.medium import publish_article, fetch_published_url
-from poster.models import Profile
+from poster.settings import (
+    get_profile_id_by_sequential_no,
+    get_profile_no_by_sequential_no,
+)
+from scheduled_poster import (
+    open_ads_power_profile,
+    post_article_to_medium,
+    close_profile,
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -29,70 +37,43 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-
-def get_profile_info_from_user() -> tuple:
-    """
-    Спрашивает у пользователя информацию о профиле.
-    Возвращает (profile_no, profile_id, sequential_no) или None.
-    """
-    logging.info("")
-    logging.info("="*60)
-    logging.info("Profile Information")
-    logging.info("="*60)
-    logging.info("Please enter the profile information for the currently open profile:")
-    
-    try:
-        profile_no_input = input("Enter profile_no (1-10): ").strip()
-        profile_no = int(profile_no_input)
-        if not (1 <= profile_no <= 10):
-            logging.error("Profile_no must be between 1 and 10!")
-            return None
-    except ValueError:
-        logging.error("Invalid profile_no! Must be a number.")
-        return None
-    
-    try:
-        profile_id_input = input("Enter profile_id (AdsPower ID): ").strip()
-        if not profile_id_input:
-            logging.error("Profile_id cannot be empty!")
-            return None
-        profile_id = profile_id_input
-    except Exception as e:
-        logging.error("Error reading profile_id: %s", e)
-        return None
-    
-    # Определяем sequential_no по profile_no (можно улучшить через PROFILE_SEQUENTIAL_MAPPING)
-    from poster.settings import PROFILE_SEQUENTIAL_MAPPING
-    sequential_no = PROFILE_SEQUENTIAL_MAPPING.get(profile_no)
-    if not sequential_no:
-        logging.warning("Could not determine sequential_no for profile_no %d, using profile_no as sequential_no", profile_no)
-        sequential_no = profile_no
-    
-    logging.info("Profile info: profile_no=%d, profile_id=%s, sequential_no=%d", profile_no, profile_id, sequential_no)
-    return (profile_no, profile_id, sequential_no)
+# Константы
+IMAGES_ROOT_DIR = "./data/images"  # Папка с изображениями для обложек
+SEQUENTIAL_NO = 1  # Используем первый профиль из секвенции
 
 
-def test_pyautogui_posting():
+def test_medium_pyautogui_posting():
     """
-    Основная функция тестера PyAutoGUI процесса.
+    Основная функция тестера PyAutoGUI процесса для Medium.
     """
     logging.info("="*60)
-    logging.info("PyAutoGUI Posting Unit Tester")
+    logging.info("Medium PyAutoGUI Posting Unit Tester")
     logging.info("="*60)
-    logging.info("")
-    logging.info("IMPORTANT: Before running this tester, ensure that:")
-    logging.info("  1. AdsPower profile is already open")
-    logging.info("  2. Medium New Story tab is already open and active")
-    logging.info("     (URL should be: https://medium.com/p/new or similar)")
-    logging.info("  3. Profile window is maximized")
-    logging.info("  4. Browser tab with Medium is in focus")
     logging.info("")
     logging.info("This tester will:")
-    logging.info("  - Ask you to select a table and article from database")
-    logging.info("  - Ask you for profile information (profile_no, profile_id)")
-    logging.info("  - Execute full PyAutoGUI posting process")
-    logging.info("  - Fetch URL using PyAutoGUI fallback (Ctrl+L, Ctrl+C)")
-    logging.info("  - Update database with the published URL")
+    logging.info("  - Automatically use first profile from sequence (sequential_no = 1)")
+    logging.info("  - Open profile via AdsPower API")
+    logging.info("  - Maximize profile window")
+    logging.info("  - Open Medium tab")
+    logging.info("  - Ask you to select a table and articles from database")
+    logging.info("  - Execute full PyAutoGUI posting process for Medium")
+    logging.info("  - Use image-based clicks for hashtags and final Publish button")
+    logging.info("  - Attach cover image if available (via Selenium driver)")
+    logging.info("  - Fetch URL and update database")
+    logging.info("")
+    
+    # Получаем первый профиль из секвенции
+    sequential_no = SEQUENTIAL_NO
+    profile_id = get_profile_id_by_sequential_no(sequential_no)
+    profile_no = get_profile_no_by_sequential_no(sequential_no)
+    
+    if not profile_id or not profile_no:
+        logging.error("Failed to get profile for sequential_no=%d", sequential_no)
+        logging.error("Make sure PROFILE_SEQUENTIAL_MAPPING is configured correctly")
+        return
+    
+    logging.info("Using profile: sequential_no=%d, profile_no=%d, profile_id=%s", 
+                sequential_no, profile_no, profile_id)
     logging.info("")
     
     response = input("Press Enter to continue, or 'q' to quit: ").strip().lower()
@@ -175,7 +156,8 @@ def test_pyautogui_posting():
         for i, article in enumerate(unpublished_articles, 1):
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             topic = article.get('topic', 'N/A')[:50] if isinstance(article, dict) else 'N/A'
-            logging.info("  %d. ID: %s | Topic: %s", i, article_id, topic)
+            cover_image = article.get('cover_image_name', 'N/A') if isinstance(article, dict) else 'N/A'
+            logging.info("  %d. ID: %s | Topic: %s | Cover: %s", i, article_id, topic, cover_image)
         
         article_choice = input("\nEnter article number to post (or 'all' for all articles): ").strip().lower()
         
@@ -188,7 +170,8 @@ def test_pyautogui_posting():
                 article_index = int(article_choice) - 1
                 if 0 <= article_index < len(unpublished_articles):
                     articles_to_test = [unpublished_articles[article_index]]
-                    logging.info("Selected article: ID %s", articles_to_test[0].get('id') if isinstance(articles_to_test[0], dict) else articles_to_test[0][0])
+                    article_id = articles_to_test[0].get('id') if isinstance(articles_to_test[0], dict) else articles_to_test[0][0]
+                    logging.info("Selected article: ID %s", article_id)
                 else:
                     logging.error("Invalid article number!")
                     return
@@ -196,42 +179,33 @@ def test_pyautogui_posting():
                 logging.error("Invalid input! Must be a number or 'all'")
                 return
         
-        # Получаем информацию о профиле
-        profile_info = get_profile_info_from_user()
-        if not profile_info:
-            logging.error("Failed to get profile information!")
-            return
-        
-        profile_no, profile_id, sequential_no = profile_info
-        
-        # Подтверждение
+        # Подтверждение перед открытием профиля
         logging.info("")
         logging.info("="*60)
-        logging.info("Ready to test PyAutoGUI posting")
+        logging.info("Ready to test Medium PyAutoGUI posting")
         logging.info("  Table: %s", selected_table)
         logging.info("  Articles: %d", len(articles_to_test))
         logging.info("  Profile: No=%d, ID=%s, Seq=%d", profile_no, profile_id, sequential_no)
+        logging.info("  Images directory: %s", IMAGES_ROOT_DIR)
         logging.info("="*60)
         logging.info("")
-        response = input("Press Enter to start testing, or 'q' to quit: ").strip().lower()
+        response = input("Press Enter to open profile and start testing, or 'q' to quit: ").strip().lower()
         if response == 'q':
             logging.info("Aborted by user")
             return
         
-        # Инициализация компонентов
-        ui = PyAutoGuiDriver()
-        coords = Coords()
-        delays = Delays()
+        # Открываем профиль и Medium вкладку
+        logging.info("")
+        logging.info("="*60)
+        logging.info("Opening profile and Medium tab...")
+        logging.info("="*60)
+        profile = open_ads_power_profile(profile_id, platform="medium")
+        if not profile:
+            logging.error("Failed to open profile! Aborting.")
+            return
         
-        # Создаем минимальный Profile объект для fetch_published_url
-        # Примечание: driver будет None, поэтому fetch_published_url будет использовать PyAutoGUI fallback
-        profile = Profile(
-            profile_id=profile_id,
-            profile_no=profile_no
-        )
-        # sequential_no и window_tag вычисляются автоматически в __post_init__
-        profile.driver = None  # Нет доступа к Selenium driver
-        profile.medium_window_handle = None
+        logging.info("✓ Profile opened and Medium tab is ready")
+        time.sleep(3)  # Даем время на загрузку
         
         posted_count = 0
         failed_count = 0
@@ -239,11 +213,16 @@ def test_pyautogui_posting():
         for article in articles_to_test:
             article_id = article.get('id') if isinstance(article, dict) else article[0]
             article_topic = article.get('topic', 'N/A')
+            cover_image_name = article.get('cover_image_name', '') if isinstance(article, dict) else ''
             
             logging.info("")
             logging.info("="*60)
-            logging.info("Testing PyAutoGUI posting for article ID %s", article_id)
+            logging.info("Testing Medium PyAutoGUI posting for article ID %s", article_id)
             logging.info("Topic: %s", article_topic[:100] if len(article_topic) > 100 else article_topic)
+            if cover_image_name:
+                logging.info("Cover image: %s", cover_image_name)
+            else:
+                logging.info("Cover image: None")
             logging.info("="*60)
             
             # Небольшая пауза перед началом
@@ -251,46 +230,30 @@ def test_pyautogui_posting():
             time.sleep(3)
             
             try:
-                # Шаг 1: Публикация статьи через PyAutoGUI
+                # Публикация статьи через функцию из scheduled_poster
                 logging.info("")
-                logging.info("STEP 1: Starting PyAutoGUI posting process...")
-                success = publish_article(ui, article, coords, delays)
-                
-                if not success:
-                    logging.error("✗ PyAutoGUI posting failed for article ID %s", article_id)
-                    failed_count += 1
-                    continue
-                
-                logging.info("✓ PyAutoGUI posting completed successfully")
-                
-                # Шаг 2: Получение URL (через PyAutoGUI fallback, так как driver=None)
-                logging.info("")
-                logging.info("STEP 2: Fetching published article URL...")
-                logging.info("  NOTE: Make sure the browser window with Medium is in focus!")
-                logging.info("  The tester will use Ctrl+L and Ctrl+C to copy URL from address bar")
-                time.sleep(2)  # Даем время на загрузку страницы
-                
-                url = fetch_published_url(profile, ui)
+                logging.info("Posting article to Medium...")
+                url = post_article_to_medium(article, profile_id)
                 
                 if url:
-                    logging.info("✓ URL retrieved: %s", url)
+                    logging.info("✓ Article ID %s posted to Medium successfully! URL: %s", article_id, url)
                     
-                    # Шаг 3: Обновление БД
+                    # Обновление БД
                     logging.info("")
-                    logging.info("STEP 3: Updating database...")
+                    logging.info("Updating database...")
                     try:
                         update_article_url_and_profile(pg_conn, selected_table, article_id, url, profile_no)
                         posted_count += 1
-                        logging.info("✓ Article ID %s posted and saved successfully!", article_id)
+                        logging.info("✓ Article ID %s saved to database!", article_id)
                     except Exception as e:
                         logging.error("✗ Failed to update database: %s", e, exc_info=True)
                         failed_count += 1
                 else:
-                    logging.error("✗ Failed to get URL for article ID %s", article_id)
+                    logging.error("✗ Failed to post article ID %s to Medium", article_id)
                     failed_count += 1
                 
             except Exception as e:
-                logging.error("Error during posting process: %s", e, exc_info=True)
+                logging.error("Error during Medium posting process: %s", e, exc_info=True)
                 failed_count += 1
             
             # Пауза между статьями (если не последняя)
@@ -303,19 +266,35 @@ def test_pyautogui_posting():
         # Итоги
         logging.info("")
         logging.info("="*60)
-        logging.info("PyAutoGUI Testing completed!")
+        logging.info("Medium PyAutoGUI Testing completed!")
         logging.info("  Posted: %d", posted_count)
         logging.info("  Failed: %d", failed_count)
         logging.info("="*60)
         
+        # Закрываем профиль после завершения
+        logging.info("")
+        logging.info("Closing profile...")
+        close_profile(profile_id)
+        logging.info("✓ Profile closed")
+        
     except KeyboardInterrupt:
         logging.warning("Interrupted by user")
+        # Закрываем профиль при прерывании
+        try:
+            close_profile(profile_id)
+        except:
+            pass
     except Exception as e:
         logging.error("Fatal error: %s", e, exc_info=True)
+        # Закрываем профиль при ошибке
+        try:
+            close_profile(profile_id)
+        except:
+            pass
     finally:
         pg_conn.close()
         logging.info("PostgreSQL connection closed")
 
 
 if __name__ == "__main__":
-    test_pyautogui_posting()
+    test_medium_pyautogui_posting()
