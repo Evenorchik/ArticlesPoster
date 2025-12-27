@@ -14,9 +14,9 @@ from poster.settings import MEDIUM_NEW_STORY_URL
 from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
 from poster.medium.cover_attacher import attach_cover_image
 
-PIC_MATCH_CONFIDENCE = 0.95
-PIC_HASHTAGS = "./pics_to_click/medium_hashtags.jpg"
-PIC_PUBLISH_SECOND = "./pics_to_click/medium_publish_second.jpg"
+PIC_MATCH_CONFIDENCE = 0.85
+PIC_HASHTAGS = "./pics_to_click/medium_hashtags.png"
+PIC_PUBLISH_SECOND = "./pics_to_click/medium_publish_second.png"
 
 
 def publish_article(
