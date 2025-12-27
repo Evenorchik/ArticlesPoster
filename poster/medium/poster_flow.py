@@ -257,19 +257,42 @@ def publish_article(
         ui.sleep(1)
         # Prefer image-based click (more robust than coordinates). Fallback to coords if not found.
         clicked = False
-        if hasattr(ui, "click_image"):
+        # IMPORTANT: keep the old behavior (two clicks) to reliably focus the hashtags input.
+        if hasattr(ui, "locate_center_on_screen"):
             try:
-                log_debug_detailed(f"  Trying image-based click (hashtags), confidence={PIC_MATCH_CONFIDENCE:.2f}, timeout=12s, img={PIC_HASHTAGS}")
+                log_debug_detailed(
+                    f"  Trying image-based locate (hashtags), confidence={PIC_MATCH_CONFIDENCE:.2f}, timeout=12s, img={PIC_HASHTAGS}"
+                )
+                center = ui.locate_center_on_screen(PIC_HASHTAGS, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
+                if center:
+                    log_debug_detailed(f"  ✓ Found hashtags image center at {center}, clicking twice")
+                    ui.click(*center)
+                    ui.sleep(0.3)
+                    ui.click(*center)
+                    clicked = True
+                else:
+                    log_debug_detailed("  ⚠ Hashtags image not found — falling back to coordinates (double click)")
+            except Exception:
+                log_debug_detailed("  ⚠ Image-based locate raised an exception (hashtags) — falling back to coordinates (double click)")
+                clicked = False
+        elif hasattr(ui, "click_image"):
+            # Fallback path if UI driver doesn't expose locate_center_on_screen
+            try:
+                log_debug_detailed(
+                    f"  Trying image-based click (hashtags), confidence={PIC_MATCH_CONFIDENCE:.2f}, timeout=12s, img={PIC_HASHTAGS}"
+                )
                 clicked = ui.click_image(PIC_HASHTAGS, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
                 if clicked:
-                    log_debug_detailed("  ✓ Image-based click succeeded (hashtags)")
+                    log_debug_detailed("  ✓ Image-based click succeeded (hashtags); performing second click on coords fallback for focus")
+                    ui.sleep(0.3)
+                    ui.click(*coords.HASHTAGS_INPUT)
                 else:
-                    log_debug_detailed("  ⚠ Image-based click did not find a match (hashtags) — falling back to coordinates")
+                    log_debug_detailed("  ⚠ Image-based click did not find a match (hashtags) — falling back to coordinates (double click)")
             except Exception:
-                log_debug_detailed("  ⚠ Image-based click raised an exception (hashtags) — falling back to coordinates")
+                log_debug_detailed("  ⚠ Image-based click raised an exception (hashtags) — falling back to coordinates (double click)")
                 clicked = False
         else:
-            log_debug_detailed("  UI driver has no click_image(); using coordinates for hashtags")
+            log_debug_detailed("  UI driver has no image-click helpers; using coordinates (double click) for hashtags")
 
         if not clicked:
             ui.screenshot_on_click(coords.HASHTAGS_INPUT, label="STEP 7: hash click (fallback coords)")
