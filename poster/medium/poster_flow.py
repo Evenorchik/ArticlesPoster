@@ -259,9 +259,17 @@ def publish_article(
         clicked = False
         if hasattr(ui, "click_image"):
             try:
+                log_debug_detailed(f"  Trying image-based click (hashtags), confidence={PIC_MATCH_CONFIDENCE:.2f}, timeout=12s, img={PIC_HASHTAGS}")
                 clicked = ui.click_image(PIC_HASHTAGS, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
+                if clicked:
+                    log_debug_detailed("  ✓ Image-based click succeeded (hashtags)")
+                else:
+                    log_debug_detailed("  ⚠ Image-based click did not find a match (hashtags) — falling back to coordinates")
             except Exception:
+                log_debug_detailed("  ⚠ Image-based click raised an exception (hashtags) — falling back to coordinates")
                 clicked = False
+        else:
+            log_debug_detailed("  UI driver has no click_image(); using coordinates for hashtags")
 
         if not clicked:
             ui.screenshot_on_click(coords.HASHTAGS_INPUT, label="STEP 7: hash click (fallback coords)")
@@ -317,9 +325,13 @@ def publish_article(
         center = None
         if hasattr(ui, "locate_center_on_screen"):
             try:
+                log_debug_detailed(f"  Locating image for final Publish, confidence={PIC_MATCH_CONFIDENCE:.2f}, timeout=12s, img={PIC_PUBLISH_SECOND}")
                 center = ui.locate_center_on_screen(PIC_PUBLISH_SECOND, confidence=PIC_MATCH_CONFIDENCE, timeout_s=12.0)
             except Exception:
+                log_debug_detailed("  ⚠ locate_center_on_screen raised an exception — falling back to coordinates")
                 center = None
+        else:
+            log_debug_detailed("  UI driver has no locate_center_on_screen(); using coordinates for final Publish")
 
         if center:
             ui.click(*center)

@@ -11,7 +11,7 @@ from poster.ui.interface import UiDriver
 from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
 
 
-def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_after_publish: float = 5.0) -> Optional[str]:
+def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_after_publish: float = 8.0) -> Optional[str]:
     """
     Получить URL опубликованной статьи на Quora через Selenium.
     
@@ -58,7 +58,8 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
 
         if profile.driver:
             # Ждем, пока URL станет финальным (не содержит /write или /compose)
-            max_wait_time = 10.0  # Максимальное время ожидания
+            # и пока это не будет корневой URL Quora (https://www.quora.com/)
+            max_wait_time = 25.0  # Максимальное время ожидания
             check_interval = 0.5  # Интервал проверки
             waited = 0.0
             
@@ -68,6 +69,17 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
                 # Проверяем, что URL не содержит /write или /compose
                 if url and 'quora.com' in url:
                     if '/write' not in url and '/compose' not in url:
+                        # Не принимаем корневую страницу Quora как URL статьи
+                        normalized = url.rstrip('/')
+                        if normalized in ("https://www.quora.com", "https://quora.com", "http://www.quora.com", "http://quora.com"):
+                            log_debug_detailed(f"  URL is Quora root, waiting... (current: {url})")
+                            if ui:
+                                ui.sleep(check_interval)
+                            else:
+                                time.sleep(check_interval)
+                            waited += check_interval
+                            continue
+
                         if is_info_mode():
                             log_info_short(f"✓ URL получен: {url}")
                         else:
@@ -95,6 +107,12 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
                 if url and ('/write' in url or '/compose' in url):
                     log_debug_detailed(f"  ⚠ URL still contains /write or /compose after waiting, but using it anyway: {url}")
                 elif url:
+                    # Если всё ещё корневой Quora — считаем, что URL получить не удалось
+                    normalized = url.rstrip('/')
+                    if normalized in ("https://www.quora.com", "https://quora.com", "http://www.quora.com", "http://quora.com"):
+                        logging.warning("  ⚠ URL is still Quora root after waiting, cannot use it as published URL: %s", url)
+                        url = None
+                    else:
                     if is_info_mode():
                         log_info_short(f"✓ URL получен: {url}")
                     else:
