@@ -267,6 +267,7 @@ def publish_article(
         ui.sleep(1)
         ui.click(*coords.QUORA_POST_BUTTON)
         log_debug_detailed("  ✓ Post button clicked successfully")
+        ui.sleep(5)
     except Exception as e:
         logging.error("  ✗ Failed to click: %s", e)
         return False
