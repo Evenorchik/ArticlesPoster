@@ -113,11 +113,11 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
                         logging.warning("  ⚠ URL is still Quora root after waiting, cannot use it as published URL: %s", url)
                         url = None
                     else:
-                    if is_info_mode():
-                        log_info_short(f"✓ URL получен: {url}")
-                    else:
-                        logging.info("  ✓ URL retrieved via Selenium")
-                        logging.info("  Retrieved URL: %s", url)
+                        if is_info_mode():
+                            log_info_short(f"✓ URL получен: {url}")
+                        else:
+                            logging.info("  ✓ URL retrieved via Selenium")
+                            logging.info("  Retrieved URL: %s", url)
                 else:
                     logging.error("  ✗ Failed to get URL from driver")
                     url = None
