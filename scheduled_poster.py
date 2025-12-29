@@ -304,8 +304,9 @@ def post_article_to_quora(article: dict, profile_id: str) -> Optional[str]:
         return None
     
     # Получаем URL опубликованной статьи
-    time.sleep(2)  # Даем время на загрузку страницы
-    url = fetch_published_url_quora(profile, _ui)
+    # ВАЖНО: publish_article_quora уже ждёт QUORA_AFTER_POST (10 секунд) после клика Post.
+    # Здесь не делаем дополнительных переключений вкладок/окон — просто берём URL с текущей вкладки.
+    url = fetch_published_url_quora(profile, _ui, wait_after_publish=0.0)
     
     if url:
         if is_info_mode():

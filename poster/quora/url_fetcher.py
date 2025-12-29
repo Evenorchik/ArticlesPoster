@@ -6,7 +6,6 @@ import logging
 import pyperclip
 from typing import Optional
 from poster.models import Profile
-from poster.adspower.tabs import safe_switch_to
 from poster.ui.interface import UiDriver
 from poster.logging_helper import is_info_mode, log_info_short, log_debug_detailed
 
@@ -14,6 +13,8 @@ from poster.logging_helper import is_info_mode, log_info_short, log_debug_detail
 def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_after_publish: float = 8.0) -> Optional[str]:
     """
     Получить URL опубликованной статьи на Quora через Selenium.
+    
+    ВАЖНО: Берёт URL строго с ТЕКУЩЕЙ открытой вкладки, без переключений.
     
     Args:
         profile: Профиль с подключенным driver
@@ -37,90 +38,15 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
     
     url = None
     try:
-        if profile.driver and profile.quora_window_handle:
-            try:
-                safe_switch_to(profile.driver, profile.quora_window_handle)
-            except (Exception, AttributeError) as e:
-                logging.debug("Window handle invalid, searching for Quora window: %s", e)
-                all_windows = profile.driver.window_handles
-                for window in all_windows:
-                    try:
-                        profile.driver.switch_to.window(window)
-                        current_url = profile.driver.current_url
-                        if 'quora.com' in current_url:
-                            profile.quora_window_handle = window
-                            break
-                    except (Exception, AttributeError):
-                        continue
-                else:
-                    if all_windows:
-                        profile.driver.switch_to.window(all_windows[-1])
-
         if profile.driver:
-            # Ждем, пока URL станет финальным (не содержит /write или /compose)
-            # и пока это не будет корневой URL Quora (https://www.quora.com/)
-            max_wait_time = 25.0  # Максимальное время ожидания
-            check_interval = 0.5  # Интервал проверки
-            waited = 0.0
+            # ВАЖНО: Берём URL строго с ТЕКУЩЕЙ вкладки, без переключений и поисков
+            url = profile.driver.current_url
             
-            while waited < max_wait_time:
-                url = profile.driver.current_url
-                
-                # Проверяем, что URL не содержит /write или /compose
-                if url and 'quora.com' in url:
-                    if '/write' not in url and '/compose' not in url:
-                        # Не принимаем корневую страницу Quora как URL статьи
-                        normalized = url.rstrip('/')
-                        if normalized in ("https://www.quora.com", "https://quora.com", "http://www.quora.com", "http://quora.com"):
-                            log_debug_detailed(f"  URL is Quora root, waiting... (current: {url})")
-                            if ui:
-                                ui.sleep(check_interval)
-                            else:
-                                time.sleep(check_interval)
-                            waited += check_interval
-                            continue
-
-                        if is_info_mode():
-                            log_info_short(f"✓ URL получен: {url}")
-                        else:
-                            logging.info("  ✓ URL retrieved via Selenium (final URL)")
-                            logging.info("  Retrieved URL: %s", url)
-                        break
-                    else:
-                        log_debug_detailed(f"  URL still contains /write or /compose, waiting... (current: {url})")
-                        if ui:
-                            ui.sleep(check_interval)
-                        else:
-                            time.sleep(check_interval)
-                        waited += check_interval
-                else:
-                    # Если URL еще не готов, ждем
-                    if ui:
-                        ui.sleep(check_interval)
-                    else:
-                        time.sleep(check_interval)
-                    waited += check_interval
-            
-            # Если после ожидания URL все еще содержит /write, берем текущий URL
-            if waited >= max_wait_time:
-                url = profile.driver.current_url
-                if url and ('/write' in url or '/compose' in url):
-                    log_debug_detailed(f"  ⚠ URL still contains /write or /compose after waiting, but using it anyway: {url}")
-                elif url:
-                    # Если всё ещё корневой Quora — считаем, что URL получить не удалось
-                    normalized = url.rstrip('/')
-                    if normalized in ("https://www.quora.com", "https://quora.com", "http://www.quora.com", "http://quora.com"):
-                        logging.warning("  ⚠ URL is still Quora root after waiting, cannot use it as published URL: %s", url)
-                        url = None
-                    else:
-                        if is_info_mode():
-                            log_info_short(f"✓ URL получен: {url}")
-                        else:
-                            logging.info("  ✓ URL retrieved via Selenium")
-                            logging.info("  Retrieved URL: %s", url)
-                else:
-                    logging.error("  ✗ Failed to get URL from driver")
-                    url = None
+            if url and is_info_mode():
+                log_info_short(f"✓ URL получен: {url}")
+            elif url:
+                logging.info("  ✓ URL retrieved from current tab")
+                logging.info("  Retrieved URL: %s", url)
         else:
             if ui:
                 logging.warning("  Driver not available, using PyAutoGUI fallback...")
@@ -151,7 +77,7 @@ def fetch_published_url(profile: Profile, ui: Optional[UiDriver] = None, wait_af
     else:
         logging.warning("="*60)
         logging.warning("⚠ URL not retrieved or invalid")
-        logging.warning("  Clipboard content: %s", url)
+        logging.warning("  Retrieved URL: %s", url)
         logging.warning("  Expected: URL starting with 'http'")
         logging.warning("="*60)
         return None
