@@ -145,7 +145,8 @@ def create_sqlite_table(sqlite_conn: sqlite3.Connection, table_name: str, column
         else:
             column_defs.append(f"{col_name} {col_type} {nullable}")
     
-    create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} (\n    {',\n    '.join(column_defs)}\n)"
+    columns_str = ',\n    '.join(column_defs)
+    create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} (\n    {columns_str}\n)"
     
     try:
         sqlite_conn.execute(create_sql)
