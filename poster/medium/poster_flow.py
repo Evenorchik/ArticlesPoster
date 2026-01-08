@@ -341,6 +341,10 @@ def publish_article(
         logging.info("STEP 9: Clicking final Publish button...")
         logging.info("  Coordinates: %s", coords.PUBLISH_BUTTON_2)
         logging.info("  Waiting 3 seconds before clicking final Publish...")
+    ui.sleep(1)
+    ui.click(*coords.PUBLISH_BUTTON_1)
+    ui.sleep(1)
+    ui.write(',', interval=0.1)
     ui.sleep(3)
     try:
         # Prefer image-based click for the second publish button. Fallback to coords.
